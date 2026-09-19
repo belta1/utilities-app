@@ -12,6 +12,10 @@ const APP_DIR = path.dirname(fileURLToPath(import.meta.url));
 export const pool = new pg.Pool({ max: 5 });
 export const query = (text, params) => pool.query(text, params);
 
+// An idle client dropped by Postgres (or a TLS reset) emits here; without a listener
+// the event is unhandled and takes the whole process down, mid-request included.
+pool.on("error", (err) => console.error("pg pool:", err.message));
+
 // numeric comes back as a string by default; the API wants numbers.
 pg.types.setTypeParser(1700, Number);
 

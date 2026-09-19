@@ -274,7 +274,7 @@ measurements, nutrition data and the TELEMETRIA / NUTRICION tabs with the origin
 |---|---|
 | **TELEMETRIA** | Body measurements, weight trend, goals (unchanged from v2) |
 | **ENTRENO** | The weekly plan. Tap an exercise card to open it: log `kg × reps` right there, see the sets done today as chips, "ultima vez" shows the previous session's sets, and the badge shows sets done vs planned (`2/4`). Suggested loads and execution steps are below the logger. |
-| **REGISTRO** | Free-form log for any date. Pick an exercise (plan exercises first under **PLAN**, then **OTROS**, or **+ nuevo ejercicio**), add sets, delete with ✕. Shows sets / exercises / volume for the day, sets grouped by exercise, and a 60-day history — tap a day to jump to it. |
+| **REGISTRO** | Free-form log for any date. Type to search (accents ignored, any word order) or pick from the list — grouped by program day (**LUNES · EMPUJE**, **MARTES · HALAR**, …), then **CORE**, **PLAN · VARIANTES**, **OTROS**, or **+ nuevo ejercicio**, add sets, delete with ✕. Shows sets / exercises / volume for the day, sets grouped by exercise, and a 60-day history — tap a day to jump to it. |
 | **NUTRICION** | Weekly meal plan and supplements (unchanged from v2) |
 
 Details worth knowing:

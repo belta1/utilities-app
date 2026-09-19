@@ -13,11 +13,18 @@ const GROT = "'Space Grotesk',sans-serif";
 // API + DATE HELPERS
 // ═══════════════════════════════════════════════════════════════
 async function api(method, url, body) {
-  const res = await fetch(url, {
-    method,
-    headers: body ? { "content-type": "application/json" } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  let res;
+  try {
+    res = await fetch(url, {
+      method,
+      headers: body ? { "content-type": "application/json" } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  } catch {
+    // fetch only rejects when no response came back at all (server down, wrong host,
+    // blocked request); say where it was trying instead of the bare "Failed to fetch".
+    throw new Error(`sin respuesta de ${location.host} (${method} ${url})`);
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || res.statusText);
   return data;
@@ -365,10 +372,8 @@ const TrainingTab = ({ exercises, today }) => {
 // ═══════════════════════════════════════════════════════════════
 // LOG TAB — any exercise, any date, history
 // ═══════════════════════════════════════════════════════════════
-const NEW_EXERCISE = "__new__";
-
-const NewExerciseForm = ({ onCreated, onCancel }) => {
-  const [name, setName] = useState("");
+const NewExerciseForm = ({ initialName = "", onCreated, onCancel }) => {
+  const [name, setName] = useState(initialName);
   const [group, setGroup] = useState("");
   const [error, setError] = useState(null);
   const submit = () => api("POST", "/api/exercises", { name, muscle_group: group || null }).then(onCreated).catch((e) => setError(e.message));
@@ -386,9 +391,116 @@ const NewExerciseForm = ({ onCreated, onCancel }) => {
   );
 };
 
+// Picker groups, following the program: one group per strength day with that day's
+// exercises in order, the core work, then the plan's variants, then everything else.
+// An exercise that repeats (Friday rotates Monday/Tuesday) gets a distinct option value
+// on its later days, since <select> can't hold two options with the same value.
+function pickerGroups(exercises) {
+  const seen = new Set();
+  const take = (name, dayIdx) => {
+    const e = exercises.byName[name];
+    if (!e) return null;
+    const value = seen.has(e.id) ? `${e.id}@${dayIdx}` : String(e.id);
+    seen.add(e.id);
+    return { value, exercise: e };
+  };
+  const groups = [];
+  const core = [];
+  days.forEach((d, i) => {
+    if (d.type === "strength") {
+      groups.push({ label: `${d.day} · ${d.label.replace(/^FUERZA — /, "")}`.toUpperCase(), items: d.exercises.map((x) => take(x.name, i)).filter(Boolean) });
+    }
+    for (const x of [...(d.core ?? []), ...(d.type === "core" ? d.exercises : [])]) {
+      const it = take(x.name, i);
+      if (it && !it.value.includes("@")) core.push(it);
+    }
+  });
+  groups.push({ label: "CORE", items: core });
+  const rest = (pred) => exercises.list.filter((e) => !seen.has(e.id) && pred(e)).map((e) => ({ value: String(e.id), exercise: e }));
+  groups.push({ label: "PLAN · VARIANTES", items: rest((e) => e.is_favorite) });
+  groups.push({ label: "OTROS", items: rest((e) => !e.is_favorite), detail: true });
+  return groups.filter((g) => g.items.length);
+}
+
+const fold = (s) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+
+// Searchable picker: a text field that filters the grouped list as you type (accents
+// ignored, name or muscle group). Closed, it shows the selected exercise; typing reopens
+// it. The last row creates a new exercise, prefilled with the query when nothing matches.
+const ExercisePicker = ({ groups, value, onPick, onCreate, accent }) => {
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(0);
+  const selected = useMemo(() => groups.flatMap((g) => g.items).find((it) => it.value === value)?.exercise, [groups, value]);
+
+  const q = fold(query.trim());
+  const visible = useMemo(() => {
+    const words = q.split(/\s+/).filter(Boolean);
+    if (!words.length) return groups;
+    const hit = (e) => { const hay = fold(`${e.name} ${e.muscle_group ?? ""}`); return words.every((w) => hay.includes(w)); };
+    return groups.map((g) => ({ ...g, items: g.items.filter(({ exercise: e }) => hit(e)) })).filter((g) => g.items.length);
+  }, [groups, q]);
+  const flat = visible.flatMap((g) => g.items);
+  const createLabel = q && !flat.length ? `+ crear "${query.trim()}"` : "+ nuevo ejercicio…";
+
+  const choose = (it) => { onPick(it.value); setQuery(""); setOpen(false); };
+  const create = () => { onCreate(flat.length ? "" : query.trim()); setQuery(""); setOpen(false); };
+  const onKey = (e) => {
+    if (e.key === "Escape") { setQuery(""); setOpen(false); e.target.blur(); }
+    else if (e.key === "ArrowDown") { e.preventDefault(); setOpen(true); setActive((a) => Math.min(a + 1, flat.length)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setActive((a) => Math.max(a - 1, 0)); }
+    else if (e.key === "Enter" && open) { e.preventDefault(); active < flat.length ? choose(flat[active]) : create(); }
+  };
+
+  let idx = -1;
+  return (
+    <div style={{ position: "relative" }}>
+      <input value={open ? query : selected?.name ?? ""} placeholder="buscar o elegir ejercicio…"
+        onChange={(e) => { setQuery(e.target.value); setActive(0); setOpen(true); }}
+        onFocus={() => { setOpen(true); setActive(0); }} onBlur={() => { setOpen(false); setQuery(""); }} onKeyDown={onKey}
+        role="combobox" aria-expanded={open} autoComplete="off" spellCheck={false}
+        style={{ ...inputStyle, fontSize: 13, paddingRight: 28, borderColor: selected ? accent + "88" : T.line }} />
+      <div style={{ position: "absolute", right: 10, top: 10, fontSize: 10, color: open ? accent : T.faint, pointerEvents: "none" }}>{open ? "▲" : "▼"}</div>
+      {open && (
+        // mousedown is swallowed so the input keeps focus (and the list stays open) while tapping a row
+        <div onMouseDown={(e) => e.preventDefault()} role="listbox" style={{
+          position: "absolute", left: 0, right: 0, top: "calc(100% + 4px)", zIndex: 20, maxHeight: 280, overflowY: "auto",
+          background: T.raised, border: `1px solid ${accent}66`, borderRadius: 9, boxShadow: "0 10px 30px rgba(0,0,0,.5)",
+        }}>
+          {visible.map((g) => (
+            <div key={g.label}>
+              <Label color={accent} style={{ padding: "8px 11px 3px", position: "sticky", top: 0, background: T.raised }}>// {g.label}</Label>
+              {g.items.map((it) => {
+                const i = ++idx;
+                const on = i === active;
+                const e = it.exercise;
+                return (
+                  <div key={it.value} role="option" aria-selected={on} onClick={() => choose(it)} onMouseEnter={() => setActive(i)} style={{
+                    display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, padding: "7px 11px", cursor: "pointer",
+                    background: on ? accent + "22" : "none", borderLeft: `2px solid ${it.value === value ? accent : "transparent"}`,
+                  }}>
+                    <span style={{ fontSize: 12, fontFamily: GROT, fontWeight: 600, color: on ? T.bone : "#CFC6B8" }}>{e.name}</span>
+                    {g.detail && e.muscle_group && <span style={{ fontSize: 8, color: T.faint, letterSpacing: 1, flexShrink: 0 }}>{e.muscle_group.toUpperCase()}</span>}
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+          {!flat.length && <div style={{ padding: "12px 11px 4px", fontSize: 10, color: T.faint, letterSpacing: 1 }}>SIN RESULTADOS</div>}
+          <div onClick={create} onMouseEnter={() => setActive(flat.length)} style={{
+            padding: "9px 11px", cursor: "pointer", fontSize: 11, fontFamily: GROT, fontWeight: 700, color: T.gold,
+            borderTop: `1px solid ${T.line}`, background: active === flat.length ? T.gold + "18" : "none",
+          }}>{createLabel}</div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const LogTab = ({ exercises, today }) => {
   const [date, setDate] = useState(today);
-  const [exerciseId, setExerciseId] = useState("");
+  const [pick, setPick] = useState("");                       // option value; see pickerGroups
+  const exerciseId = pick.split("@")[0];
   const [creating, setCreating] = useState(false);
   const [history, setHistory] = useState([]);
   const log = useSets(date);
@@ -417,8 +529,7 @@ const LogTab = ({ exercises, today }) => {
     return [...m.entries()].map(([d, sets]) => ({ date: d, sets, exercises: new Set(sets.map((s) => s.exercise_id)).size }));
   }, [history]);
 
-  const favorites = exercises.list.filter((e) => e.is_favorite);
-  const others = exercises.list.filter((e) => !e.is_favorite);
+  const picker = useMemo(() => pickerGroups(exercises), [exercises.list]);
 
   if (!date) return <div style={{ padding: 24, textAlign: "center", color: T.faint, fontFamily: MONO, fontSize: 10 }}>cargando…</div>;
 
@@ -448,17 +559,12 @@ const LogTab = ({ exercises, today }) => {
       {/* add */}
       <div style={{ background: T.surface, border: `1px solid ${T.line}`, borderRadius: 12, padding: "11px 12px", marginBottom: 12, display: "flex", flexDirection: "column", gap: 8 }}>
         <Label color={accent}>// ANADIR_SERIE</Label>
-        <select value={creating ? NEW_EXERCISE : exerciseId}
-          onChange={(e) => { if (e.target.value === NEW_EXERCISE) setCreating(true); else { setCreating(false); setExerciseId(e.target.value); } }}
-          style={{ ...inputStyle, fontSize: 13, appearance: "auto" }}>
-          <option value="">— elegir ejercicio —</option>
-          <optgroup label="PLAN">{favorites.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}</optgroup>
-          <optgroup label="OTROS">{others.map((e) => <option key={e.id} value={e.id}>{e.name}{e.muscle_group ? ` · ${e.muscle_group}` : ""}</option>)}</optgroup>
-          <option value={NEW_EXERCISE}>+ nuevo ejercicio…</option>
-        </select>
+        <ExercisePicker groups={picker} value={pick} accent={accent}
+          onPick={(v) => { setCreating(false); setPick(v); }}
+          onCreate={(name) => { setPick(""); setCreating(name || true); }} />
         {creating && (
-          <NewExerciseForm onCancel={() => setCreating(false)}
-            onCreated={async (e) => { await exercises.refresh(); setExerciseId(String(e.id)); setCreating(false); }} />
+          <NewExerciseForm key={creating} initialName={creating === true ? "" : creating} onCancel={() => setCreating(false)}
+            onCreated={async (e) => { await exercises.refresh(); setPick(String(e.id)); setCreating(false); }} />
         )}
         {selected && (
           <div style={{ display: "flex", gap: 10, alignItems: "stretch" }}>
@@ -490,7 +596,7 @@ const LogTab = ({ exercises, today }) => {
                     {sets.length} series · {fmtKg(volume(sets))} kg · max {Math.max(...sets.map((s) => s.load_kg))} kg
                   </div>
                 </div>
-                <Btn ghost small accent={accent} onClick={() => { setCreating(false); setExerciseId(String(exercise.id)); window.scrollTo({ top: 0, behavior: "smooth" }); }}>+</Btn>
+                <Btn ghost small accent={accent} onClick={() => { setCreating(false); setPick(String(exercise.id)); window.scrollTo({ top: 0, behavior: "smooth" }); }}>+</Btn>
               </div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
                 {sets.map((s) => <SetChip key={s.id} set={s} accent={accent} onRemove={() => log.remove(s.id)} />)}

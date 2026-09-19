@@ -451,6 +451,8 @@ pages/
   recomp_v2.jsx         the original, unchanged
   _lib/recomp/          tokens.jsx (colors), data.jsx (plan, meals, measurements), ui.jsx (shared tabs)
   hello.jsx, list.jsx   minimal examples of the two page shapes
+scripts/sql.mjs         run SQL with the PG* env vars from a machine without psql
+CLAUDE.md, .claude/skills/   notes and skills for Claude Code (new-webui, jfubuntu-postgres)
 Dockerfile              node:24-alpine, production
 docker-compose.yml      pulls the published image (Portainer Option A); `--build` builds it (Option B / C)
 .github/workflows/docker.yml   builds + pushes ghcr.io/<you>/jsx-render on push to main

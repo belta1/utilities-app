@@ -391,38 +391,45 @@ const NewExerciseForm = ({ initialName = "", onCreated, onCancel }) => {
   );
 };
 
-// Picker groups, following the program: one group per strength day with that day's
-// exercises in order, the core work, then the plan's variants, then everything else.
-// An exercise that repeats (Friday rotates Monday/Tuesday) gets a distinct option value
-// on its later days, since <select> can't hold two options with the same value.
+// Picker groups by movement pattern — the split the program is built on. Plan
+// exercises take the pattern of the day they belong to (Lunes empuje, Martes halar,
+// Miercoles pierna, core finishers) and lead their group in program order; the rest
+// of the catalog is classified by muscle group, with a few pulls that live under
+// "Hombros" (face pull, pajaros, remo al menton) caught by name.
+const PATTERNS = [
+  ["push", "EMPUJE", "Pecho · Hombros · Triceps"],
+  ["pull", "HALAR", "Espalda · Biceps · Rear delt"],
+  ["legs", "PIERNA", "Cuadriceps · Gluteos · Isquios · Gemelos"],
+  ["core", "CORE", "Abdomen · Lumbar"],
+  ["other", "OTROS", ""],
+];
+const PATTERN_OF_GROUP = {
+  Pecho: "push", Hombros: "push", Triceps: "push",
+  Espalda: "pull", Biceps: "pull", Trapecio: "pull",
+  Piernas: "legs", Gluteos: "legs", Isquios: "legs", Gemelos: "legs", "Cadena posterior": "legs",
+  Core: "core",
+};
+const dayPattern = (d) => (d.type === "core" ? "core" : /Pierna/.test(d.label) ? "legs" : /Halar/.test(d.label) && !/Empuje/.test(d.label) ? "pull" : /Empuje/.test(d.label) && !/Halar/.test(d.label) ? "push" : null);
+const guessPattern = (e) => (/face pull|pajaros|remo|encogimiento/i.test(e.name) ? "pull" : PATTERN_OF_GROUP[e.muscle_group] ?? "other");
+
 function pickerGroups(exercises) {
+  const buckets = Object.fromEntries(PATTERNS.map(([key]) => [key, []]));
   const seen = new Set();
-  const take = (name, dayIdx) => {
-    const e = exercises.byName[name];
-    if (!e) return null;
-    const value = seen.has(e.id) ? `${e.id}@${dayIdx}` : String(e.id);
+  const put = (e, pattern, plan) => {
+    if (!e || seen.has(e.id)) return;
     seen.add(e.id);
-    return { value, exercise: e };
+    buckets[pattern].push({ value: String(e.id), exercise: e, plan });
   };
-  const groups = [];
-  const core = [];
-  days.forEach((d, i) => {
-    if (d.type === "strength") {
-      groups.push({ label: `${d.day} · ${d.label.replace(/^FUERZA — /, "")}`.toUpperCase(), items: d.exercises.map((x) => take(x.name, i)).filter(Boolean) });
-    }
-    for (const x of [...(d.core ?? []), ...(d.type === "core" ? d.exercises : [])]) {
-      const it = take(x.name, i);
-      if (it && !it.value.includes("@")) core.push(it);
-    }
-  });
-  groups.push({ label: "CORE", items: core });
-  const rest = (pred) => exercises.list.filter((e) => !seen.has(e.id) && pred(e)).map((e) => ({ value: String(e.id), exercise: e }));
-  groups.push({ label: "PLAN · VARIANTES", items: rest((e) => e.is_favorite) });
-  groups.push({ label: "OTROS", items: rest((e) => !e.is_favorite), detail: true });
-  return groups.filter((g) => g.items.length);
+  for (const d of days) {
+    const p = dayPattern(d);
+    if (p) for (const x of d.exercises) put(exercises.byName[x.name], p, true);
+    for (const x of d.core ?? []) put(exercises.byName[x.name], "core", true);
+  }
+  for (const e of exercises.list) put(e, guessPattern(e), false);
+  return PATTERNS.map(([key, label, hint]) => ({ label, hint, items: buckets[key] })).filter((g) => g.items.length);
 }
 
-const fold = (s) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+const fold = (s) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 
 // Searchable picker: a text field that filters the grouped list as you type (accents
 // ignored, name or muscle group). Closed, it shows the selected exercise; typing reopens
@@ -469,18 +476,25 @@ const ExercisePicker = ({ groups, value, onPick, onCreate, accent }) => {
         }}>
           {visible.map((g) => (
             <div key={g.label}>
-              <Label color={accent} style={{ padding: "8px 11px 3px", position: "sticky", top: 0, background: T.raised }}>// {g.label}</Label>
-              {g.items.map((it) => {
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", padding: "8px 11px 3px", position: "sticky", top: 0, background: T.raised }}>
+                <Label color={accent}>// {g.label}</Label>
+                {g.hint && <span style={{ fontSize: 7, color: T.faint, letterSpacing: 1, fontFamily: MONO }}>{g.hint}</span>}
+              </div>
+              {g.items.map((it, j) => {
                 const i = ++idx;
                 const on = i === active;
                 const e = it.exercise;
+                const firstOther = !it.plan && j > 0 && g.items[j - 1].plan;   // plan → catalog boundary
                 return (
                   <div key={it.value} role="option" aria-selected={on} onClick={() => choose(it)} onMouseEnter={() => setActive(i)} style={{
                     display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, padding: "7px 11px", cursor: "pointer",
                     background: on ? accent + "22" : "none", borderLeft: `2px solid ${it.value === value ? accent : "transparent"}`,
+                    borderTop: firstOther ? `1px dashed ${T.line}` : "none",
                   }}>
-                    <span style={{ fontSize: 12, fontFamily: GROT, fontWeight: 600, color: on ? T.bone : "#CFC6B8" }}>{e.name}</span>
-                    {g.detail && e.muscle_group && <span style={{ fontSize: 8, color: T.faint, letterSpacing: 1, flexShrink: 0 }}>{e.muscle_group.toUpperCase()}</span>}
+                    <span style={{ fontSize: 12, fontFamily: GROT, fontWeight: 600, color: on ? T.bone : it.plan ? "#CFC6B8" : T.ash }}>
+                      {it.plan && <span style={{ color: accent, marginRight: 6 }}>●</span>}{e.name}
+                    </span>
+                    {e.muscle_group && <span style={{ fontSize: 8, color: T.faint, letterSpacing: 1, flexShrink: 0 }}>{e.muscle_group.toUpperCase()}</span>}
                   </div>
                 );
               })}
@@ -499,8 +513,7 @@ const ExercisePicker = ({ groups, value, onPick, onCreate, accent }) => {
 
 const LogTab = ({ exercises, today }) => {
   const [date, setDate] = useState(today);
-  const [pick, setPick] = useState("");                       // option value; see pickerGroups
-  const exerciseId = pick.split("@")[0];
+  const [exerciseId, setExerciseId] = useState("");
   const [creating, setCreating] = useState(false);
   const [history, setHistory] = useState([]);
   const log = useSets(date);
@@ -559,12 +572,12 @@ const LogTab = ({ exercises, today }) => {
       {/* add */}
       <div style={{ background: T.surface, border: `1px solid ${T.line}`, borderRadius: 12, padding: "11px 12px", marginBottom: 12, display: "flex", flexDirection: "column", gap: 8 }}>
         <Label color={accent}>// ANADIR_SERIE</Label>
-        <ExercisePicker groups={picker} value={pick} accent={accent}
-          onPick={(v) => { setCreating(false); setPick(v); }}
-          onCreate={(name) => { setPick(""); setCreating(name || true); }} />
+        <ExercisePicker groups={picker} value={exerciseId} accent={accent}
+          onPick={(v) => { setCreating(false); setExerciseId(v); }}
+          onCreate={(name) => { setExerciseId(""); setCreating(name || true); }} />
         {creating && (
           <NewExerciseForm key={creating} initialName={creating === true ? "" : creating} onCancel={() => setCreating(false)}
-            onCreated={async (e) => { await exercises.refresh(); setPick(String(e.id)); setCreating(false); }} />
+            onCreated={async (e) => { await exercises.refresh(); setExerciseId(String(e.id)); setCreating(false); }} />
         )}
         {selected && (
           <div style={{ display: "flex", gap: 10, alignItems: "stretch" }}>
@@ -596,7 +609,7 @@ const LogTab = ({ exercises, today }) => {
                     {sets.length} series · {fmtKg(volume(sets))} kg · max {Math.max(...sets.map((s) => s.load_kg))} kg
                   </div>
                 </div>
-                <Btn ghost small accent={accent} onClick={() => { setCreating(false); setPick(String(exercise.id)); window.scrollTo({ top: 0, behavior: "smooth" }); }}>+</Btn>
+                <Btn ghost small accent={accent} onClick={() => { setCreating(false); setExerciseId(String(exercise.id)); window.scrollTo({ top: 0, behavior: "smooth" }); }}>+</Btn>
               </div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
                 {sets.map((s) => <SetChip key={s.id} set={s} accent={accent} onRemove={() => log.remove(s.id)} />)}

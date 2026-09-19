@@ -24,7 +24,7 @@ Browser ──GET /recomp_v3──▶ server.mjs ──▶ pages/recomp_v3.jsx  
 2. [Deploy with Docker](#2-deploy-with-docker)
    - [Prerequisites on the server](#prerequisites-on-the-server)
    - [Option A — Portainer stack from GitHub](#option-a--portainer-stack-from-github)
-   - [Option B — Portainer with a prebuilt image (GHCR)](#option-b--portainer-with-a-prebuilt-image-ghcr)
+   - [Option B — build the image on the server instead](#option-b--build-the-image-on-the-server-instead)
    - [Option C — docker compose on the host](#option-c--docker-compose-on-the-host)
    - [Updating](#updating)
 3. [Configuration](#3-configuration)
@@ -116,62 +116,66 @@ git push -u origin main
 
 ### Option A — Portainer stack from GitHub
 
-Portainer clones the repository on the server and builds the image there. No registry
-needed. Works on Docker standalone environments (not Swarm).
+Portainer clones the repository on the server and pulls the image that GitHub Actions
+publishes on every push to `main` (`ghcr.io/<you>/jsx-render:latest`). Works on Docker
+standalone environments and Swarm alike; nothing is built on the server.
 
-1. In Portainer open your environment → **Stacks** → **+ Add stack**.
-2. **Name:** `jsx_server`.
-3. **Build method:** **Repository**.
-4. **Repository URL:** `https://github.com/<you>/jsx-render`
+1. Push the repo (step 3 above) and wait for the **docker image** workflow to go green
+   under the *Actions* tab. The first run creates the package **private**, even when the
+   repository is public, and a private package cannot be pulled anonymously. Either make
+   it public — *your profile → Packages → jsx-render → Package settings → Change
+   visibility* — or keep it private and give Portainer a registry credential
+   (*Registries → + Add registry → Custom*, URL `ghcr.io`, username your GitHub user,
+   password a PAT with only the `read:packages` scope). A token alone, without one of
+   these two, does nothing: Portainer does not use the host's `docker login`.
+2. In Portainer open your environment → **Stacks** → **+ Add stack**.
+3. **Name:** `jsx_server`.
+4. **Build method:** **Repository**.
+5. **Repository URL:** `https://github.com/<you>/jsx-render`
    **Repository reference:** `refs/heads/main`
    **Compose path:** `docker-compose.yml`
-   If the repository is private, enable **Authentication** and paste a GitHub personal
-   access token (classic, `repo` scope) as the password.
-5. **Environment variables** → **+ Add an environment variable**. `PGPASSWORD` is
+   Only if the repository is private, enable **Authentication** and paste a GitHub
+   personal access token (classic, `repo` scope) as the password.
+6. **Environment variables** → **+ Add an environment variable**. `PGPASSWORD` is
    required; the rest only if your setup differs from the defaults:
 
    | Name | Value |
    |---|---|
    | `PGPASSWORD` | password of the `belta1` Postgres role |
+   | `IMAGE` | *(only if the repo is not `belta1/utilities-app`)* `ghcr.io/<you>/jsx-render:latest` |
    | `PGUSER` | *(optional)* Postgres role, default `belta1` |
    | `PGDATABASE` | *(optional)* database name, default `recomp` |
    | `PGSSLMODE` | *(optional)* `no-verify` (default, TLS), `require`, or `disable` if Postgres has no TLS |
    | `PAGES_PATH` | *(optional)* host folder with the pages, default `/home/belta1/docker_compose/config/jsx_server` |
    | `PORT` | *(optional)* host port, default `3000` |
 
-6. *(Optional)* **GitOps updates** → enable **Polling** (e.g. every 5 minutes) so a
+7. *(Optional)* **GitOps updates** → enable **Polling** (e.g. every 5 minutes) so a
    `git push` redeploys the stack automatically. Or enable **Webhook** and add the
    generated URL to the GitHub repo under *Settings → Webhooks*.
-7. **Deploy the stack.** The first deploy builds the image (about a minute). The
-   container log should end with:
+8. **Deploy the stack.** The container log should end with:
 
    ```
    db ready: 83 images, 81 new exercises
    jsx-render listening on http://localhost:3000  (pages: /pages)
    ```
 
-8. Open `http://<server>:3000/recomp_v3`.
+9. Open `http://<server>:3000/recomp_v3`.
 
-### Option B — Portainer with a prebuilt image (GHCR)
+To update later: **Stacks → jsx_server → Pull and redeploy** (the *Re-pull image* toggle
+is what fetches the new image). Give Actions a minute after the push first, or you'll
+redeploy the previous image.
 
-Use this if you'd rather not build on the server. The workflow in
-[`.github/workflows/docker.yml`](.github/workflows/docker.yml) builds the image on every
-push to `main` and publishes it to GitHub Container Registry as
-`ghcr.io/<you>/jsx-render:latest`.
+### Option B — build the image on the server instead
 
-1. Push the repo (step 3 above). Wait for the **docker image** workflow to go green under
-   the *Actions* tab. The first run also creates the package; make it public under
-   *your profile → Packages → jsx-render → Package settings → Change visibility*, or keep
-   it private and add a registry credential in Portainer (*Registries → + Add registry →
-   Custom*, URL `ghcr.io`, username your GitHub user, password a PAT with `read:packages`).
-2. Same as Option A, but **Compose path:** `docker-compose.ghcr.yml` and one more
-   environment variable:
+If you'd rather not depend on GHCR, build locally. The compose file has both `image:`
+and `build: .`, so `--build` produces the same image from the checkout:
 
-   | Name | Value |
-   |---|---|
-   | `IMAGE` | `ghcr.io/<you>/jsx-render:latest` |
+```sh
+docker compose up -d --build
+```
 
-3. Deploy. To update later: **Stacks → jsx_server → Pull and redeploy**.
+In Portainer, a Git stack cannot do this through *Pull and redeploy* — that path only
+pulls. Build on the host as above, or tag the local build as the `IMAGE` the stack expects.
 
 ### Option C — docker compose on the host
 
@@ -210,7 +214,7 @@ All settings are environment variables. Locally they come from `.env` (see
 | `PAGES_DIR` | `pages` (`/pages` in Docker) | server | Folder the server reads pages from |
 | `PAGES_PATH` | `/home/belta1/docker_compose/config/jsx_server` | compose | Host folder bind-mounted at `/pages` |
 | `NODE_ENV` | `development` (`production` in Docker) | server | Production = minified browser bundle, React production build |
-| `IMAGE` | — | `docker-compose.ghcr.yml` | Prebuilt image to run |
+| `IMAGE` | `ghcr.io/belta1/utilities-app:latest` | compose | Image to run; `docker compose up --build` builds it locally under this name instead |
 
 ---
 
@@ -448,8 +452,7 @@ pages/
   _lib/recomp/          tokens.jsx (colors), data.jsx (plan, meals, measurements), ui.jsx (shared tabs)
   hello.jsx, list.jsx   minimal examples of the two page shapes
 Dockerfile              node:24-alpine, production
-docker-compose.yml      build on host (Portainer Option A / compose)
-docker-compose.ghcr.yml pull prebuilt image (Portainer Option B)
+docker-compose.yml      pulls the published image (Portainer Option A); `--build` builds it (Option B / C)
 .github/workflows/docker.yml   builds + pushes ghcr.io/<you>/jsx-render on push to main
 ```
 
@@ -502,8 +505,23 @@ the pages folder.
 **Buttons do nothing** — the page is an expression page (no `export`), which is static by
 design. Convert it to a module page with `export default`.
 
+**`Failed to pull images of the stack … pull access denied for jsx_server, repository does
+not exist or may require 'docker login'`** — the stack's compose file names an image that
+no registry has (an older `docker-compose.yml` used `image: jsx_server:local` with
+`build: .`), so *Re-pull image* can never succeed, whatever token you create. Pull the
+latest repo revision in Portainer (**Pull and redeploy**, which also refreshes the compose
+file) so the stack runs `ghcr.io/…:latest`.
+
+**`ghcr.io/…: unauthorized` / `denied`** — the GHCR package is private (the default on
+first push). Make it public, or add a `ghcr.io` registry in Portainer (see Option A).
+Portainer ignores `docker login` done on the host.
+
+**`docker build` fails with `failed to authorize … auth.docker.io … 401`** — the host has a
+stale Docker Hub login (`docker info` shows a *Username*). `docker logout`; public base
+images pull anonymously.
+
 **Portainer: "build" not supported** — the environment is Swarm, or a remote agent
-without build access. Use Option B (prebuilt image).
+without build access. Not an issue with Option A, which only pulls; use `--build` only on the host.
 
 **GitOps polling doesn't redeploy** — the compose file must change for Portainer to
 redeploy; a page-only change doesn't need a redeploy anyway (copy it to the host folder).

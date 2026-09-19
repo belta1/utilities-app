@@ -1,10 +1,14 @@
-# Deploy with `docker compose up -d --build` on the host, or as a Portainer stack from
-# the Git repository (see README → Deploy). Variables come from a local .env file or,
-# in Portainer, from the stack's environment variables.
+# Deploy as a Portainer stack from the Git repository ("Pull and redeploy" pulls the
+# image GitHub Actions publishes on every push to main), or with `docker compose up -d`
+# on the host. `docker compose up -d --build` builds the image locally instead.
+# Variables come from a local .env file or, in Portainer, from the stack's environment
+# variables.
 services:
   jsx_server:
+    # Both image and build: `compose pull` fetches the published image (the GHCR package
+    # must be public, or Portainer needs a ghcr.io registry); `--build` overrides it.
+    image: ${IMAGE:-ghcr.io/belta1/utilities-app:latest}
     build: .
-    image: jsx_server:local
     container_name: jsx_server
     restart: unless-stopped
     ports:

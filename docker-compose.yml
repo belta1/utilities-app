@@ -1,0 +1,26 @@
+# Deploy with `docker compose up -d --build` on the host, or as a Portainer stack from
+# the Git repository (see README → Deploy). Variables come from a local .env file or,
+# in Portainer, from the stack's environment variables.
+services:
+  jsx_server:
+    build: .
+    image: jsx_server:local
+    container_name: jsx_server
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      PGHOST: ${PGHOST:-postgres}
+      PGPORT: ${PGPORT:-5432}
+      PGDATABASE: ${PGDATABASE:-recomp}
+      PGUSER: ${PGUSER:-recomp}
+      PGPASSWORD: ${PGPASSWORD:?set PGPASSWORD}
+    volumes:
+      # .jsx pages live on the host; edits are picked up without a restart
+      - ${PAGES_PATH:-/home/belta1/docker_compose/config/jsx_server}:/pages:ro
+    networks:
+      - pgnet
+
+networks:
+  pgnet:
+    external: true

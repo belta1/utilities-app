@@ -13,7 +13,7 @@ services:
       PGHOST: ${PGHOST:-postgres}
       PGPORT: ${PGPORT:-5432}
       PGDATABASE: ${PGDATABASE:-recomp}
-      PGUSER: ${PGUSER:-recomp}
+      PGUSER: ${PGUSER:-belta1}
       PGPASSWORD: ${PGPASSWORD:?set PGPASSWORD}
     volumes:
       # .jsx pages live on the host; edits are picked up without a restart

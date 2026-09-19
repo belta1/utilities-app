@@ -46,6 +46,7 @@ const SCHEMA = `
   CREATE INDEX IF NOT EXISTS workout_sets_exercise_idx ON workout_sets (exercise_id, performed_on);
 `;
 
+// The database itself (PGDATABASE) must already exist; only the tables are managed here.
 export async function migrate() {
   await query(SCHEMA);
 }

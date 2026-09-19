@@ -46,9 +46,9 @@ Requires Node 24+ and a Postgres you can reach.
 ```sh
 npm install
 docker run -d --name pg -e POSTGRES_PASSWORD=pg -p 5433:5432 postgres:17-alpine   # if you have no Postgres
-docker exec -i pg psql -U postgres < db/init.sql                                    # creates db + user "recomp"
+docker exec pg psql -U postgres -c "CREATE DATABASE recomp"                          # the server needs it to exist
 
-PGHOST=localhost PGPORT=5433 PGDATABASE=recomp PGUSER=recomp PGPASSWORD=change-me npm start
+PGHOST=localhost PGPORT=5433 PGDATABASE=recomp PGUSER=postgres PGPASSWORD=pg npm start
 ```
 
 Open <http://localhost:3000> — the index lists every page; `/recomp_v3` is the dashboard.
@@ -65,9 +65,10 @@ jsx-render listening on http://localhost:3000  (pages: D:\jsx-render\pages)
 
 The server runs as one container. It needs:
 
-- a **Postgres** container reachable on a shared Docker network (`pgnet`) as `postgres`;
+- a **Postgres** container reachable on a shared Docker network (`pgnet`) as `postgres`,
+  with a database named `recomp` that the `belta1` role can use;
 - a **host folder** with the `.jsx` pages, bind-mounted read-only into the container;
-- a **password** for the `recomp` database user.
+- the **password** of the `belta1` role.
 
 ### Prerequisites on the server
 
@@ -82,11 +83,14 @@ docker network connect pgnet postgres             # skip if already attached
 docker network inspect pgnet --format '{{range .Containers}}{{.Name}} {{end}}'   # should list: postgres
 ```
 
-Create the database and user (edit the password in `db/init.sql` first):
+Create the database if you haven't already. The server creates its own tables on first
+start, so an empty database is all it needs:
 
 ```sh
-docker exec -i postgres psql -U postgres < db/init.sql
+docker exec postgres psql -U belta1 -c "CREATE DATABASE recomp"
 ```
+
+A different role or database name works too — set `PGUSER` / `PGDATABASE`.
 
 **2. Pages folder.** Copy the `pages/` directory to the host path that the compose file
 mounts. The `_lib/` subfolder is required — `recomp_v3.jsx` imports from it.
@@ -128,7 +132,9 @@ needed. Works on Docker standalone environments (not Swarm).
 
    | Name | Value |
    |---|---|
-   | `PGPASSWORD` | the password from `db/init.sql` |
+   | `PGPASSWORD` | password of the `belta1` Postgres role |
+   | `PGUSER` | *(optional)* Postgres role, default `belta1` |
+   | `PGDATABASE` | *(optional)* database name, default `recomp` |
    | `PAGES_PATH` | *(optional)* host folder with the pages, default `/home/belta1/docker_compose/config/jsx_server` |
    | `PORT` | *(optional)* host port, default `3000` |
 
@@ -195,9 +201,9 @@ All settings are environment variables. Locally they come from `.env` (see
 |---|---|---|---|
 | `PGHOST` | `postgres` | server | Postgres host — the container name on `pgnet` |
 | `PGPORT` | `5432` | server | |
-| `PGDATABASE` | `recomp` | server | Created by `db/init.sql` |
-| `PGUSER` | `recomp` | server | Created by `db/init.sql` |
-| `PGPASSWORD` | *(required)* | server | Same value as in `db/init.sql` |
+| `PGDATABASE` | `recomp` | server | Must already exist; tables are created by the server |
+| `PGUSER` | `belta1` | server | Existing Postgres role with rights on `PGDATABASE` |
+| `PGPASSWORD` | *(required)* | server | Password of `PGUSER` |
 | `PORT` | `3000` | server + compose | Listen port; in compose, the host port that maps to the container |
 | `PAGES_DIR` | `pages` (`/pages` in Docker) | server | Folder the server reads pages from |
 | `PAGES_PATH` | `/home/belta1/docker_compose/config/jsx_server` | compose | Host folder bind-mounted at `/pages` |
@@ -375,7 +381,7 @@ GROUP BY 1 ORDER BY 2 DESC;
 UPDATE exercises SET is_favorite = true, sort_order = 5 WHERE slug = 'dominadas';
 ```
 
-Backup: `docker exec postgres pg_dump -U recomp recomp > recomp.sql`.
+Backup: `docker exec postgres pg_dump -U belta1 recomp > recomp.sql`.
 
 ---
 
@@ -434,7 +440,6 @@ seed/
   exercises.mjs         exercise catalog (name, group, equipment, favorite, figure key)
   exercise-svgs.jsx     27 original figures (from recomp_v2)
   exercise-svgs-extra.jsx  56 new figures + drawing helpers
-db/init.sql             creates the database and user (run once, as superuser)
 pages/
   recomp_v3.jsx         the dashboard + workout log
   recomp_v2.jsx         the original, unchanged
@@ -467,9 +472,12 @@ password. Add `PGPASSWORD` to the stack's environment variables (Portainer) or `
 Check `docker network inspect pgnet` lists both `postgres` and `jsx_server`. If your
 Postgres container has another name, set `PGHOST` to it.
 
-**`password authentication failed for user "recomp"`** — the password in the stack
-variables differs from the one in `db/init.sql`. Reset it:
-`docker exec postgres psql -U postgres -c "ALTER USER recomp PASSWORD 'new'"`.
+**`password authentication failed for user "belta1"`** — `PGPASSWORD` in the stack
+variables doesn't match the role's password. Reset it:
+`docker exec postgres psql -U postgres -c "ALTER USER belta1 PASSWORD 'new'"`.
+
+**`database "recomp" does not exist`** — create it (see Prerequisites) or point
+`PGDATABASE` at an existing one.
 
 **`no page recomp_v3.jsx`** — the pages folder on the host is empty or mounted from the
 wrong path. `docker exec jsx_server ls /pages` should list `_lib recomp_v3.jsx …`.
@@ -507,4 +515,6 @@ This is a home-network tool. Read this before exposing it any further.
 - **Recommended:** keep port 3000 on the LAN or a VPN; if it must be reachable from the
   internet, put it behind a reverse proxy with authentication (Authelia, Caddy basic auth,
   Cloudflare Access…) and don't forward `/render`.
-- The database user only needs its own database; `db/init.sql` grants nothing else.
+- The server only needs a role that can create tables in its own database. If `belta1`
+  is a superuser, consider a dedicated role: `CREATE USER recomp WITH PASSWORD '…';`
+  `ALTER DATABASE recomp OWNER TO recomp;` and set `PGUSER=recomp`.

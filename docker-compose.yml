@@ -15,6 +15,9 @@ services:
       PGDATABASE: ${PGDATABASE:-recomp}
       PGUSER: ${PGUSER:-belta1}
       PGPASSWORD: ${PGPASSWORD:?set PGPASSWORD}
+      # no-verify = TLS without certificate check (pg_hba "hostssl" + self-signed cert);
+      # use "disable" if your Postgres has ssl=off
+      PGSSLMODE: ${PGSSLMODE:-no-verify}
     volumes:
       # .jsx pages live on the host; edits are picked up without a restart
       - ${PAGES_PATH:-/home/belta1/docker_compose/config/jsx_server}:/pages:ro

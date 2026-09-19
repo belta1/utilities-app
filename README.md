@@ -135,6 +135,7 @@ needed. Works on Docker standalone environments (not Swarm).
    | `PGPASSWORD` | password of the `belta1` Postgres role |
    | `PGUSER` | *(optional)* Postgres role, default `belta1` |
    | `PGDATABASE` | *(optional)* database name, default `recomp` |
+   | `PGSSLMODE` | *(optional)* `no-verify` (default, TLS), `require`, or `disable` if Postgres has no TLS |
    | `PAGES_PATH` | *(optional)* host folder with the pages, default `/home/belta1/docker_compose/config/jsx_server` |
    | `PORT` | *(optional)* host port, default `3000` |
 
@@ -204,6 +205,7 @@ All settings are environment variables. Locally they come from `.env` (see
 | `PGDATABASE` | `recomp` | server | Must already exist; tables are created by the server |
 | `PGUSER` | `belta1` | server | Existing Postgres role with rights on `PGDATABASE` |
 | `PGPASSWORD` | *(required)* | server | Password of `PGUSER` |
+| `PGSSLMODE` | `no-verify` (compose) / unset (`npm start`) | server | `no-verify` = TLS, self-signed cert accepted; `require`/`verify-full` = TLS with certificate check; `disable` = plain TCP |
 | `PORT` | `3000` | server + compose | Listen port; in compose, the host port that maps to the container |
 | `PAGES_DIR` | `pages` (`/pages` in Docker) | server | Folder the server reads pages from |
 | `PAGES_PATH` | `/home/belta1/docker_compose/config/jsx_server` | compose | Host folder bind-mounted at `/pages` |
@@ -471,6 +473,17 @@ password. Add `PGPASSWORD` to the stack's environment variables (Portainer) or `
 **`getaddrinfo ENOTFOUND postgres` / `ECONNREFUSED`** — the server can't reach Postgres.
 Check `docker network inspect pgnet` lists both `postgres` and `jsx_server`. If your
 Postgres container has another name, set `PGHOST` to it.
+
+**`pg_hba.conf rejects connection for host "…", user "belta1", database "recomp", no encryption`**
+— Postgres only accepts TLS (`hostssl`) from that network and the server connected in
+plain TCP. Set `PGSSLMODE=no-verify` (the compose default; add it if you deploy another
+way). `require` fails with `self-signed certificate` unless Postgres has a CA-signed
+cert. The other fix is on the Postgres side: allow plain connections from the docker
+network in `pg_hba.conf` (`host all all 192.168.32.0/20 scram-sha-256`, using the subnet
+from `docker network inspect pgnet`), then `SELECT pg_reload_conf();`.
+
+**`The server does not support SSL connections`** — the opposite case: Postgres has
+`ssl=off`. Set `PGSSLMODE=disable`.
 
 **`password authentication failed for user "belta1"`** — `PGPASSWORD` in the stack
 variables doesn't match the role's password. Reset it:

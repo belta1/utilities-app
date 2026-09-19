@@ -5,9 +5,10 @@ pages, plus a JSON API on Postgres. The first app on it is the RECOMP training d
 (`pages/recomp_v3.jsx`). The same server hosts any other web UI you drop into `pages/`.
 
 The README is the reference (deploy, API, DB, figures, troubleshooting); this file is the
-working knowledge that is not obvious from the code. Skills in `.claude/skills/`:
-`new-webui` (a new page or app on this server, with a template) and `jfubuntu-postgres`
-(the database engine: connect, create databases and roles, hba, backups).
+working knowledge that is not obvious from the code. Two user-wide skills (in
+`~/.claude/skills/`, so they work from any project) cover the workflows: `new-webui`
+(a new page or app on this server, with a page template) and `jfubuntu-postgres` (the
+database engine: connect, create databases and roles, hba, backups, plus a SQL runner).
 
 ## Layout
 

@@ -1,0 +1,4 @@
+# shell scripts must reach the Linux image with LF endings, whatever the checkout OS
+*.sh text eol=lf
+coach/bin/* text eol=lf
+scripts/* text eol=lf

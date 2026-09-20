@@ -42,12 +42,24 @@ const SCHEMA = `
     performed_on  date NOT NULL DEFAULT current_date,
     set_number    integer NOT NULL,
     load_kg       numeric(6,2) NOT NULL CHECK (load_kg >= 0),
-    reps          integer NOT NULL CHECK (reps > 0),
+    reps          integer CHECK (reps > 0),
+    duration_s    integer CHECK (duration_s > 0),
     note          text,
-    logged_at     timestamptz NOT NULL DEFAULT now()
+    logged_at     timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT workout_sets_reps_or_time CHECK (reps IS NOT NULL OR duration_s IS NOT NULL)
   );
   CREATE INDEX IF NOT EXISTS workout_sets_date_idx ON workout_sets (performed_on);
   CREATE INDEX IF NOT EXISTS workout_sets_exercise_idx ON workout_sets (exercise_id, performed_on);
+
+  -- Timed sets (planks): a set is reps or seconds, load_kg stays (0 for bodyweight).
+  -- Upgrades a table created before duration_s existed; no-ops afterwards.
+  ALTER TABLE workout_sets ADD COLUMN IF NOT EXISTS duration_s integer CHECK (duration_s > 0);
+  ALTER TABLE workout_sets ALTER COLUMN reps DROP NOT NULL;
+  DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'workout_sets_reps_or_time') THEN
+      ALTER TABLE workout_sets ADD CONSTRAINT workout_sets_reps_or_time CHECK (reps IS NOT NULL OR duration_s IS NOT NULL);
+    END IF;
+  END $$;
 `;
 
 // The database itself (PGDATABASE) must already exist; only the tables are managed here.

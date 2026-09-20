@@ -75,11 +75,16 @@ plain CSS (`indexPage()` in `server.mjs`) — keep the two in sync if tokens cha
   is JSON and unauthenticated — the server is meant to sit on a private network.
 - `numeric` columns come back as numbers (type parser in `db.mjs`); dates go out as
   `YYYY-MM-DD` via `to_char`.
+- A set is `reps` or `duration_s` (timed, e.g. planks), never both; the UI toggles REPS/SEG and
+  defaults from the previous set or the plan ("seg" in the plan reps). `volume()` ignores timed sets.
 
 ## Scripts
 
 - `node scripts/sql.mjs "<sql>" | -f file.sql [--json] [--no-tx]` — run SQL with the PG* env
   vars (no psql on Windows). See the `jfubuntu-postgres` skill for the engine itself.
+- `node scripts/import-sesiones.mjs <file> [--apply]` — import a phone-notes log (WhatsApp
+  "[HH:MM, M/D/YYYY]" headers, exercise / load / one line per set); dry run without `--apply`,
+  aliases table inside for the shorthand names, skips (date, exercise) pairs already logged.
 
 ## Running locally
 

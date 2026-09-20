@@ -311,8 +311,8 @@ JSON over HTTP, no authentication. All dates are `YYYY-MM-DD`. Errors return
 |---|---|---|
 | `GET` | `/api/sets?date=DATE` | Sets logged that day, in logging order |
 | `GET` | `/api/sets?from=DATE&to=DATE` | Inclusive range, newest day first |
-| `POST` | `/api/sets` | Body `{ exercise_id, load_kg, reps, date?, note? }`. `date` defaults to today (server time). `set_number` is assigned: next number for that exercise on that day. |
-| `PATCH` | `/api/sets/:id` | Body: any of `load_kg`, `reps`, `note` |
+| `POST` | `/api/sets` | Body `{ exercise_id, load_kg?, reps, date?, note? }` or, for a timed set (plank), `{ exercise_id, load_kg?, duration_s, date?, note? }` — exactly one of `reps` / `duration_s`; `load_kg` defaults to 0. `date` defaults to today (server time). `set_number` is assigned: next number for that exercise on that day. |
+| `PATCH` | `/api/sets/:id` | Body: any of `load_kg`, `reps`, `duration_s`, `note` (sending `reps` or `duration_s` switches the set to that kind) |
 | `DELETE` | `/api/sets/:id` | |
 
 A set looks like:
@@ -321,7 +321,7 @@ A set looks like:
 {
   "id": 42, "exercise_id": 1, "exercise_name": "Press banca con barra", "image_key": "press_banca",
   "performed_on": "2026-09-19", "set_number": 2, "load_kg": 42.5, "reps": 8,
-  "note": null, "logged_at": "2026-09-19T17:10:23.285Z"
+  "duration_s": null, "note": null, "logged_at": "2026-09-19T17:10:23.285Z"
 }
 ```
 
@@ -357,7 +357,7 @@ exercises         id, slug (unique), name, muscle_group, equipment,
                   is_favorite, sort_order, image_key ──┘, created_at
                     │
 workout_sets      id, exercise_id ──┘, performed_on (date), set_number,
-                  load_kg numeric(6,2) ≥ 0, reps int > 0, note, logged_at
+                  load_kg numeric(6,2) ≥ 0, reps int > 0 | duration_s int > 0 (one of the two), note, logged_at
                   indexes: (performed_on), (exercise_id, performed_on)
 ```
 
@@ -452,6 +452,7 @@ pages/
   _lib/recomp/          tokens.jsx (colors), data.jsx (plan, meals, measurements), ui.jsx (shared tabs)
   hello.jsx, list.jsx   minimal examples of the two page shapes
 scripts/sql.mjs         run SQL with the PG* env vars from a machine without psql
+scripts/import-sesiones.mjs   load a phone-notes training log (see header) through the API; dry run by default
 CLAUDE.md               working notes for Claude Code (skills live user-wide in ~/.claude/skills/)
 Dockerfile              node:24-alpine, production
 docker-compose.yml      pulls the published image (Portainer Option A); `--build` builds it (Option B / C)

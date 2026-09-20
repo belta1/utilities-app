@@ -36,7 +36,8 @@ const parseDate = (iso) => { const [y, m, d] = iso.split("-").map(Number); retur
 const shiftDate = (iso, delta) => { const d = parseDate(iso); d.setDate(d.getDate() + delta); return localDate(d); };
 const fmtDate = (iso) => parseDate(iso).toLocaleDateString("es-ES", { weekday: "short", day: "2-digit", month: "short" });
 const fmtKg = (n) => Math.round(n).toLocaleString("es-ES");
-const volume = (sets) => sets.reduce((sum, s) => sum + s.load_kg * s.reps, 0);
+const volume = (sets) => sets.reduce((sum, s) => sum + (s.reps ? s.load_kg * s.reps : 0), 0);
+const fmtSet = (s) => (s.duration_s ? `${s.duration_s}s` : `${s.load_kg}×${s.reps}`);
 
 // ═══════════════════════════════════════════════════════════════
 // DATA HOOKS
@@ -67,7 +68,7 @@ function useSets(date) {
   };
   return {
     sets, busy, error,
-    add: (exercise_id, load_kg, reps) => run(() => api("POST", "/api/sets", { exercise_id, load_kg, reps, date })),
+    add: (body) => run(() => api("POST", "/api/sets", { ...body, date })),
     remove: (id) => run(() => api("DELETE", `/api/sets/${id}`)),
   };
 }
@@ -130,22 +131,30 @@ const SetChip = ({ set, accent, onRemove }) => (
   <div style={{ display: "inline-flex", alignItems: "center", gap: 6, background: T.bg, border: `1px solid ${accent}44`, borderRadius: 7, padding: "4px 7px 4px 9px" }}>
     <span style={{ fontSize: 8, color: T.faint, fontFamily: MONO }}>S{set.set_number}</span>
     <span style={{ fontSize: 12, fontFamily: GROT, fontWeight: 700, color: T.bone }}>
-      {set.load_kg}<span style={{ fontSize: 9, color: T.ash }}>kg</span> × {set.reps}
+      {set.duration_s
+        ? <>{set.load_kg > 0 && <>{set.load_kg}<span style={{ fontSize: 9, color: T.ash }}>kg</span> · </>}{set.duration_s}<span style={{ fontSize: 9, color: T.ash }}>s</span></>
+        : <>{set.load_kg}<span style={{ fontSize: 9, color: T.ash }}>kg</span> × {set.reps}</>}
     </span>
     {onRemove && <button onClick={onRemove} title="Borrar serie" style={{ background: "none", border: "none", color: T.faint, cursor: "pointer", fontSize: 11, padding: "0 2px" }}>✕</button>}
   </div>
 );
 
 // Inline "add a set" form for one exercise. Empty fields fall back to the placeholder,
-// which is the previous set today, else the last set of the previous session.
-const SetLogger = ({ exercise, accent, sets, log, date }) => {
+// which is the previous set today, else the last set of the previous session. A set is
+// reps or seconds (planks); the mode follows the previous set, else the `timed` hint
+// from the plan, and can be flipped with the REPS/SEG toggle.
+const SetLogger = ({ exercise, accent, sets, log, date, timed = false }) => {
   const [kg, setKg] = useState("");
-  const [reps, setReps] = useState("");
+  const [n, setN] = useState("");
+  const [modeChoice, setMode] = useState(null);
   const last = useLastSession(exercise.id, date);
   const prev = sets[sets.length - 1] ?? last?.sets?.[last.sets.length - 1];
-  const kgVal = kg === "" ? prev?.load_kg : Number(kg.replace(",", "."));
-  const repsVal = reps === "" ? prev?.reps : Number(reps);
-  const ok = Number.isFinite(kgVal) && kgVal >= 0 && Number.isInteger(repsVal) && repsVal > 0;
+  const mode = modeChoice ?? (prev ? (prev.duration_s ? "time" : "reps") : timed ? "time" : "reps");
+  const prevN = prev ? (mode === "time" ? prev.duration_s : prev.reps) : null;
+  const kgVal = kg === "" ? (prev?.load_kg ?? (mode === "time" ? 0 : undefined)) : Number(kg.replace(",", "."));
+  const nVal = n === "" ? prevN : Number(n);
+  const ok = Number.isFinite(kgVal) && kgVal >= 0 && Number.isInteger(nVal) && nVal > 0;
+  const submit = () => log.add({ exercise_id: exercise.id, load_kg: kgVal, [mode === "time" ? "duration_s" : "reps"]: nVal });
 
   return (
     <div style={{ background: T.bg, border: `1px solid ${accent}55`, borderRadius: 9, padding: "10px 12px" }} onClick={(e) => e.stopPropagation()}>
@@ -153,7 +162,7 @@ const SetLogger = ({ exercise, accent, sets, log, date }) => {
         <Label color={accent}>// REGISTRO_HOY</Label>
         {last && (
           <div style={{ fontSize: 9, color: T.ash, fontFamily: MONO }}>
-            ultima vez {fmtDate(last.performed_on)}: <span style={{ color: T.bone }}>{last.sets.map((s) => `${s.load_kg}×${s.reps}`).join(" · ")}</span>
+            ultima vez {fmtDate(last.performed_on)}: <span style={{ color: T.bone }}>{last.sets.map(fmtSet).join(" · ")}</span>
           </div>
         )}
       </div>
@@ -163,9 +172,15 @@ const SetLogger = ({ exercise, accent, sets, log, date }) => {
         </div>
       )}
       <div style={{ display: "flex", gap: 7, alignItems: "flex-end" }}>
-        <NumField label="CARGA KG" value={kg} onChange={setKg} placeholder={prev ? String(prev.load_kg) : "kg"} step={0.5} accent={accent} />
-        <NumField label="REPS" value={reps} onChange={setReps} placeholder={prev ? String(prev.reps) : "reps"} accent={accent} />
-        <Btn accent={accent} disabled={!ok || log.busy} onClick={() => log.add(exercise.id, kgVal, repsVal)}>+ SERIE {sets.length + 1}</Btn>
+        <NumField label="CARGA KG" value={kg} onChange={setKg} placeholder={prev ? String(prev.load_kg) : mode === "time" ? "0" : "kg"} step={0.5} accent={accent} />
+        <NumField label={mode === "time" ? "SEGUNDOS" : "REPS"} value={n} onChange={setN} placeholder={prevN != null ? String(prevN) : mode === "time" ? "seg" : "reps"} accent={accent} />
+        <button onClick={() => { setMode(mode === "time" ? "reps" : "time"); setN(""); }} title="Cambiar reps / segundos" style={{
+          alignSelf: "flex-end", background: T.surface, border: `1px solid ${T.line}`, borderRadius: 8, padding: "9px 7px", cursor: "pointer",
+          fontFamily: MONO, fontSize: 8, letterSpacing: 1, color: T.ash, whiteSpace: "nowrap",
+        }}>
+          <span style={{ color: mode === "reps" ? accent : T.faint }}>REPS</span>/<span style={{ color: mode === "time" ? accent : T.faint }}>SEG</span>
+        </button>
+        <Btn accent={accent} disabled={!ok || log.busy} onClick={submit}>+ SERIE {sets.length + 1}</Btn>
       </div>
       {log.error && <div style={{ marginTop: 6, fontSize: 10, color: "#D98A8A" }}>{log.error}</div>}
     </div>
@@ -280,7 +295,7 @@ const TrainingTab = ({ exercises, today }) => {
                     )}
                     {isExp && (
                       <div style={{ marginTop: 9, display: "flex", flexDirection: "column", gap: 8 }}>
-                        {dbEx && today && <SetLogger exercise={dbEx} accent={accent} sets={done} log={log} date={today} />}
+                        {dbEx && today && <SetLogger exercise={dbEx} accent={accent} sets={done} log={log} date={today} timed={/seg/i.test(ex.reps)} />}
                         {w && (
                           <div style={{ background: T.bg, border: `1px solid ${accent}33`, borderRadius: 9, padding: "10px 12px" }}>
                             <Label style={{ marginBottom: 7 }}>// CARGA</Label>
@@ -324,20 +339,43 @@ const TrainingTab = ({ exercises, today }) => {
               <div style={{ marginTop: 12 }}>
                 <Label color={T.gold} style={{ fontSize: 9, marginBottom: 8 }}>// CORE_FINISHER — 5-8 MIN</Label>
                 <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-                  {sel.core.map((ex, ci) => (
-                    <div key={ci} style={{ background: T.surface, border: `1px solid ${T.gold}22`, borderRadius: 11, padding: "10px 13px" }}>
-                      <div style={{ fontSize: 12, fontWeight: 600, color: T.gold, marginBottom: 3, fontFamily: GROT }}>{ex.name}</div>
-                      <div style={{ fontSize: 10, color: T.ash, lineHeight: 1.5, marginBottom: 8 }}>{ex.note}</div>
-                      <div style={{ display: "flex", gap: 5 }}>
-                        {[["SER", ex.sets, T.gold], ["REPS", ex.reps, T.bone], ["PAUSA", ex.rest, T.ash]].map(([lbl, val, col], j) => (
-                          <div key={j} style={{ background: T.bg, borderRadius: 7, padding: "5px 8px", flex: 1, textAlign: "center", border: `1px solid ${T.line}` }}>
-                            <div style={{ fontSize: 7, color: T.faint, letterSpacing: 1.5, fontFamily: MONO }}>{lbl}</div>
-                            <div style={{ fontSize: 11, fontFamily: GROT, fontWeight: 700, color: col }}>{val}</div>
+                  {sel.core.map((ex, ci) => {
+                    const key = `core-${ci}`;                       // own key space, separate from the main list
+                    const isExp = expandedEx === key;
+                    const dbEx = exercises.byName[ex.name];
+                    const done = setsFor(ex.name);
+                    const target = Number(ex.sets) || 0;
+                    return (
+                      <div key={ci} onClick={() => setExpandedEx(isExp ? null : key)}
+                        style={{ background: isExp ? T.raised : T.surface, border: `1px solid ${isExp ? T.gold + "66" : done.length ? T.gold + "44" : T.gold + "22"}`, borderRadius: 11, padding: "10px 13px", cursor: "pointer", transition: "all .2s" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+                          <div style={{ fontSize: 12, fontWeight: 600, color: T.gold, marginBottom: 3, fontFamily: GROT }}>{ex.name}</div>
+                          <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                            {target > 0 && (
+                              <div style={{ fontSize: 9, fontFamily: MONO, color: done.length >= target ? T.sage : done.length ? T.gold : T.faint, border: `1px solid ${done.length ? T.gold + "55" : T.line}`, borderRadius: 5, padding: "1px 5px" }}>
+                                {done.length}/{target}
+                              </div>
+                            )}
+                            <div style={{ fontSize: 11, color: isExp ? T.gold : T.faint }}>{isExp ? "▲" : "▼"}</div>
                           </div>
-                        ))}
+                        </div>
+                        <div style={{ fontSize: 10, color: T.ash, lineHeight: 1.5, marginBottom: 8 }}>{ex.note}</div>
+                        <div style={{ display: "flex", gap: 5 }}>
+                          {[["SER", ex.sets, T.gold], [/seg/i.test(ex.reps) ? "TIEMPO" : "REPS", ex.reps, T.bone], ["PAUSA", ex.rest, T.ash]].map(([lbl, val, col], j) => (
+                            <div key={j} style={{ background: T.bg, borderRadius: 7, padding: "5px 8px", flex: 1, textAlign: "center", border: `1px solid ${T.line}` }}>
+                              <div style={{ fontSize: 7, color: T.faint, letterSpacing: 1.5, fontFamily: MONO }}>{lbl}</div>
+                              <div style={{ fontSize: 11, fontFamily: GROT, fontWeight: 700, color: col }}>{val}</div>
+                            </div>
+                          ))}
+                        </div>
+                        {isExp && dbEx && today && (
+                          <div style={{ marginTop: 9 }}>
+                            <SetLogger exercise={dbEx} accent={T.gold} sets={done} log={log} date={today} timed={/seg/i.test(ex.reps)} />
+                          </div>
+                        )}
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -606,7 +644,9 @@ const LogTab = ({ exercises, today }) => {
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 12, fontWeight: 600, color: T.bone, fontFamily: GROT, lineHeight: 1.3 }}>{exercise.name}</div>
                   <div style={{ fontSize: 9, color: T.ash, fontFamily: MONO, marginTop: 2 }}>
-                    {sets.length} series · {fmtKg(volume(sets))} kg · max {Math.max(...sets.map((s) => s.load_kg))} kg
+                    {sets.every((s) => s.duration_s)
+                      ? `${sets.length} series · max ${Math.max(...sets.map((s) => s.duration_s))} s`
+                      : `${sets.length} series · ${fmtKg(volume(sets))} kg · max ${Math.max(...sets.map((s) => s.load_kg))} kg`}
                   </div>
                 </div>
                 <Btn ghost small accent={accent} onClick={() => { setCreating(false); setExerciseId(String(exercise.id)); window.scrollTo({ top: 0, behavior: "smooth" }); }}>+</Btn>

@@ -40,7 +40,7 @@ const EXERCISE_COLS = `
 const SET_COLS = `
   s.id, s.exercise_id, e.name AS exercise_name, e.image_key,
   to_char(s.performed_on, 'YYYY-MM-DD') AS performed_on,
-  s.set_number, s.load_kg, s.reps, s.note, s.logged_at`;
+  s.set_number, s.load_kg, s.reps, s.duration_s, s.note, s.logged_at`;
 
 // ── handlers ──────────────────────────────────────────────────────
 
@@ -99,20 +99,30 @@ async function listSets({ date, from, to }) {
   return rows;
 }
 
+// A set is `reps` (with a load) or `duration_s` (timed, e.g. a plank; load_kg 0 unless
+// weighted) — exactly one of the two. Empty strings count as absent so forms can pass both.
+const optional = (v) => v == null || v === "";
+function asSetMeasure(body) {
+  const reps = optional(body.reps) ? null : asNumber(body.reps, "reps", { min: 1, integer: true });
+  const duration = optional(body.duration_s) ? null : asNumber(body.duration_s, "duration_s", { min: 1, integer: true });
+  if ((reps == null) === (duration == null)) throw bad("pass reps or duration_s (not both)");
+  return { reps, duration };
+}
+
 async function createSet(body) {
   const exerciseId = asNumber(body.exercise_id, "exercise_id", { min: 1, integer: true });
-  const loadKg = asNumber(body.load_kg, "load_kg", { min: 0 });
-  const reps = asNumber(body.reps, "reps", { min: 1, integer: true });
+  const loadKg = optional(body.load_kg) ? 0 : asNumber(body.load_kg, "load_kg", { min: 0 });
+  const { reps, duration } = asSetMeasure(body);
   const date = asDate(body.date, "date");
   const note = asText(body.note, "note", { max: 500 });
   const { rows } = await query(
     `WITH ins AS (
-       INSERT INTO workout_sets (exercise_id, performed_on, set_number, load_kg, reps, note)
-       SELECT $1, d, coalesce((SELECT max(set_number) FROM workout_sets WHERE exercise_id = $1 AND performed_on = d), 0) + 1, $3, $4, $5
+       INSERT INTO workout_sets (exercise_id, performed_on, set_number, load_kg, reps, duration_s, note)
+       SELECT $1, d, coalesce((SELECT max(set_number) FROM workout_sets WHERE exercise_id = $1 AND performed_on = d), 0) + 1, $3, $4, $5, $6
        FROM (SELECT coalesce($2::date, current_date) AS d) x
        RETURNING *)
      SELECT ${SET_COLS} FROM ins s JOIN exercises e ON e.id = s.exercise_id`,
-    [exerciseId, date, loadKg, reps, note],
+    [exerciseId, date, loadKg, reps, duration, note],
   );
   return rows[0];
 }
@@ -125,7 +135,12 @@ async function updateSet(id, body) {
     fields.push(`${col} = $${params.length}`);
   };
   if (body.load_kg != null) set("load_kg", asNumber(body.load_kg, "load_kg", { min: 0 }));
-  if (body.reps != null) set("reps", asNumber(body.reps, "reps", { min: 1, integer: true }));
+  if ("reps" in body || "duration_s" in body) {
+    // switching a set between reps and time clears the other column
+    const { reps, duration } = asSetMeasure(body);
+    set("reps", reps);
+    set("duration_s", duration);
+  }
   if ("note" in body) set("note", asText(body.note, "note", { max: 500 }));
   if (!fields.length) throw bad("nothing to update");
   const { rows } = await query(

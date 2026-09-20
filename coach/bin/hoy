@@ -1,2 +1,2 @@
 #!/usr/bin/env bash
-exec node /app/coach/bin/hoy.mjs "$@"
+exec node /coach/bin/hoy.mjs "$@"

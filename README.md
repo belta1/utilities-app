@@ -34,8 +34,9 @@ Browser ──GET /recomp_v3──▶ server.mjs ──▶ pages/recomp_v3.jsx  
 7. [Database](#7-database)
 8. [Exercise figures](#8-exercise-figures)
 9. [Project layout](#9-project-layout)
-10. [Troubleshooting](#10-troubleshooting)
-11. [Security](#11-security)
+10. [Coach (Claude Code agent)](#10-coach-claude-code-agent)
+11. [Troubleshooting](#11-troubleshooting)
+12. [Security](#12-security)
 
 ---
 
@@ -142,7 +143,8 @@ standalone environments and Swarm alike; nothing is built on the server.
    | Name | Value |
    |---|---|
    | `PGPASSWORD` | password of the `belta1` Postgres role |
-   | `IMAGE` | *(only if the repo is not `belta1/utilities-app`)* `ghcr.io/<you>/jsx-render:latest` |
+   | `IMAGE` | *(only if the repo is not `belta1/exercise-app`)* `ghcr.io/<you>/<repo>:latest` |
+   | `COACH_PGPASSWORD` | password of the read-only `coach_ro` role (section *Coach*) |
    | `PGUSER` | *(optional)* Postgres role, default `belta1` |
    | `PGDATABASE` | *(optional)* database name, default `recomp` |
    | `PGSSLMODE` | *(optional)* `no-verify` (default, TLS), `require`, or `disable` if Postgres has no TLS |
@@ -214,7 +216,11 @@ All settings are environment variables. Locally they come from `.env` (see
 | `PAGES_DIR` | `pages` (`/pages` in Docker) | server | Folder the server reads pages from |
 | `PAGES_PATH` | `/home/belta1/docker_compose/config/jsx_server` | compose | Host folder bind-mounted at `/pages` |
 | `NODE_ENV` | `development` (`production` in Docker) | server | Production = minified browser bundle, React production build |
-| `IMAGE` | `ghcr.io/belta1/utilities-app:latest` | compose | Image to run; `docker compose up --build` builds it locally under this name instead |
+| `IMAGE` | `ghcr.io/belta1/exercise-app:latest` | compose | Image both services run; `docker compose up --build` builds it locally under this name instead |
+| `COACH_PGPASSWORD` | *(required)* | compose (coach) | Password of the read-only `coach_ro` role |
+| `COACH_PGUSER` | `coach_ro` | compose (coach) | Read-only role the coach uses for `sql` |
+| `COACH_NAME` | `Coach RECOMP` | compose (coach) | Session title in claude.ai/code and the app |
+| `TZ` | `America/Santiago` | compose (coach) | Local date for "today" |
 
 ---
 
@@ -453,6 +459,7 @@ pages/
   hello.jsx, list.jsx   minimal examples of the two page shapes
 scripts/sql.mjs         run SQL with the PG* env vars from a machine without psql
 scripts/import-sesiones.mjs   load a phone-notes training log (see header) through the API; dry run by default
+coach/                  the Claude Code coaching agent (manual, skills, tools, entrypoint) — section 10
 CLAUDE.md               working notes for Claude Code (skills live user-wide in ~/.claude/skills/)
 Dockerfile              node:24-alpine, production
 docker-compose.yml      pulls the published image (Portainer Option A); `--build` builds it (Option B / C)
@@ -471,7 +478,72 @@ How a request for `/recomp_v3` is served:
 
 ---
 
-## 10. Troubleshooting
+## 10. Coach (Claude Code agent)
+
+`coach/` is a Claude Code project that coaches the plan from your phone: what to train
+today with load targets computed from the log, logging sets from free text, weekly
+reviews, importing phone notes. It runs as the `coach` service — same image as the
+server, [Remote Control](https://code.claude.com/docs/en/remote-control) server mode,
+unprivileged user, read-only access to the app code, the pages and the database; it
+writes only to its own `coach_data` volume and, through the API, to the workout log.
+
+```
+phone / claude.ai/code ──Remote Control──▶ coach container ──▶ http://jsx_server:3000/api/*
+                                                             ──▶ postgres (role coach_ro, SELECT only)
+                                                             ──▶ /pages (plan data, read-only)
+```
+
+What's inside: [`coach/README.md`](coach/README.md). The manual it follows:
+[`coach/CLAUDE.md`](coach/CLAUDE.md).
+
+### Setup (once)
+
+1. **Read-only role** in Postgres (as `postgres`):
+
+   ```sql
+   CREATE ROLE coach_ro LOGIN PASSWORD '…';
+   GRANT CONNECT ON DATABASE recomp TO coach_ro;
+   \c recomp
+   GRANT USAGE ON SCHEMA public TO coach_ro;
+   GRANT SELECT ON ALL TABLES IN SCHEMA public TO coach_ro;
+   ALTER DEFAULT PRIVILEGES FOR ROLE belta1 IN SCHEMA public GRANT SELECT ON TABLES TO coach_ro;
+   ```
+
+2. **Stack variable** `COACH_PGPASSWORD` (Portainer → stack → environment variables), then
+   deploy. The `coach` container starts and waits — it logs
+   `not signed in. Run: docker exec -it coach claude → /login` every minute until step 3.
+
+3. **Sign in and consent**, from the host:
+
+   ```sh
+   docker exec -it coach claude      # accept the workspace-trust dialog, then: /login (opens a URL + code), then /exit
+   docker attach coach               # the server starts; answer "y" to "Enable Remote Control?"
+                                     # detach with Ctrl-p Ctrl-q  (Ctrl-C would stop it)
+   ```
+
+   Both are stored in the `coach_home` volume and survive redeploys. The session
+   **Coach RECOMP** now appears at claude.ai/code and in the Claude app under Remote Control,
+   for the account signed in (Pro/Max; API keys are not supported).
+
+4. *(Optional)* previous conversations: copy them into the volume so the coach can read them —
+   `docker cp chat.md coach:/coach/data/history/2026-08-plan.md` (any `.md`; keep them
+   out of the repo). `data/PROFILE.md` is created from `coach/PROFILE.example.md` on
+   first start; edit it in place the same way, or just tell the coach.
+
+### Operating it
+
+- From the phone: `/hoy`, `/registrar` (or just "hice banca 40x8 x4"), `/revision`,
+  `/importar`. It always shows what it is about to log and asks *¿confirmo?* first.
+- It restarts itself if the Remote Control server exits (network outage > 10 min) and
+  Docker restarts the container on failure. If it is offline in the app:
+  `docker logs coach --tail 20`.
+- Changing `coach/CLAUDE.md`, skills or `bin/` = push → *Pull and redeploy* (it's in the
+  image). Personal data is not in the image: `coach_data` keeps it.
+- Updating Claude Code = rebuild the image (`ARG CLAUDE_VERSION`, default `latest` at build
+  time) — every push does that.
+- Reset the login: `docker volume rm exercise-app_coach_home` with the stack stopped.
+
+## 11. Troubleshooting
 
 **`set PGPASSWORD` when deploying** — the compose file refuses to start without a
 password. Add `PGPASSWORD` to the stack's environment variables (Portainer) or `.env`.
@@ -537,7 +609,7 @@ Logs: `docker logs -f jsx_server` (or the container's *Logs* tab in Portainer).
 
 ---
 
-## 11. Security
+## 12. Security
 
 This is a home-network tool. Read this before exposing it any further.
 

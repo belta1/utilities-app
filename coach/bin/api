@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# JSON call to the workout API on this host.
+#   api GET  /api/sets?date=2026-09-20
+#   api POST /api/sets '{"exercise_id":1,"load_kg":40,"reps":8}'
+#   api DELETE /api/sets/42
+set -euo pipefail
+method=${1:?method}; path=${2:?path}; body=${3:-}
+url="${API_URL:-http://localhost:3000}$path"
+if [ -n "$body" ]; then
+  curl -sS -X "$method" "$url" -H 'content-type: application/json' -d "$body" -w '\n'
+else
+  curl -sS -X "$method" "$url" -w '\n'
+fi

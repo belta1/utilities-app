@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# SQL against the recomp database as the coach's read-only role (PG* env of this
+# container). Writes are refused by Postgres itself; they go through the API.
+#   sql "select count(*) from workout_sets"
+#   sql --json "select * from exercises limit 3"
+exec node /app/scripts/sql.mjs "$@"

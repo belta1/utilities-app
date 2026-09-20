@@ -3,11 +3,14 @@
 # on the host. `docker compose up -d --build` builds the image locally instead.
 # Variables come from a local .env file or, in Portainer, from the stack's environment
 # variables.
+#
+# Two services share one image: the pages server + API, and the coach (Claude Code
+# serving Remote Control; see coach/README.md).
 services:
   jsx_server:
     # Both image and build: `compose pull` fetches the published image (the GHCR package
     # must be public, or Portainer needs a ghcr.io registry); `--build` overrides it.
-    image: ${IMAGE:-ghcr.io/belta1/utilities-app:latest}
+    image: ${IMAGE:-ghcr.io/belta1/exercise-app:latest}
     build: .
     container_name: jsx_server
     restart: unless-stopped
@@ -27,6 +30,45 @@ services:
       - ${PAGES_PATH:-/home/belta1/docker_compose/config/jsx_server}:/pages:ro
     networks:
       - pgnet
+
+  coach:
+    image: ${IMAGE:-ghcr.io/belta1/exercise-app:latest}
+    container_name: coach
+    restart: unless-stopped
+    command: /coach/entrypoint.sh
+    working_dir: /coach
+    user: node
+    # Remote Control server mode wants a terminal; attach with `docker attach coach`
+    # (detach with Ctrl-p Ctrl-q) to answer its one-time "Enable Remote Control?".
+    tty: true
+    stdin_open: true
+    depends_on:
+      - jsx_server
+    environment:
+      HOME: /home/node
+      TZ: ${TZ:-America/Santiago}
+      API_URL: http://jsx_server:3000
+      COACH_NAME: ${COACH_NAME:-Coach RECOMP}
+      # read-only database role for ad-hoc SQL; writes go through the API
+      PGHOST: ${PGHOST:-postgres}
+      PGPORT: ${PGPORT:-5432}
+      PGDATABASE: ${PGDATABASE:-recomp}
+      PGUSER: ${COACH_PGUSER:-coach_ro}
+      PGPASSWORD: ${COACH_PGPASSWORD:?set COACH_PGPASSWORD (read-only role, see README → Coach)}
+      PGSSLMODE: ${PGSSLMODE:-no-verify}
+      PAGES_DIR: /pages
+    volumes:
+      # claude.ai login, consents and session state — must persist across redeploys
+      - coach_home:/home/node
+      # PROFILE.md, history/ (imported conversations, coach notes), notas/ — personal
+      - coach_data:/coach/data
+      - ${PAGES_PATH:-/home/belta1/docker_compose/config/jsx_server}:/pages:ro
+    networks:
+      - pgnet
+
+volumes:
+  coach_home:
+  coach_data:
 
 networks:
   pgnet:

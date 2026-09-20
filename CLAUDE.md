@@ -106,16 +106,27 @@ Two independent halves — deploying one does not deploy the other:
    `/home/belta1/docker_compose/config/jsx_server/` (`PAGES_PATH`). Copy the changed
    page **and `_lib/`** there (`scp -r pages/_lib pages/<name>.jsx belta1@jfubuntu:…`).
    Live on the next request.
-2. **Server code** (`server.mjs`, `api.mjs`, `db.mjs`, `seed/`) ships in the Docker
-   image: push to `main` → GitHub Actions builds `ghcr.io/belta1/utilities-app:latest`
+2. **Server code** (`server.mjs`, `api.mjs`, `db.mjs`, `seed/`, `scripts/`, `coach/`) ships in the Docker
+   image: push to `main` → GitHub Actions builds `ghcr.io/belta1/exercise-app:latest`
    (package is public) → Portainer, stack `utilities-app`: **Pull and redeploy**. Wait
    for the Actions run before pulling, or you redeploy the previous image.
 
-The running stack: container `jsx_server` on `:3000`, Postgres container `postgres` on
+The running stack: containers `jsx_server` on `:3000` and `coach` (the Claude Code coaching agent,
+Remote Control server mode, same image; README → Coach), Postgres container `postgres` on
 the `pgnet` network, TLS with a self-signed cert (`PGSSLMODE=no-verify`). Portainer is
 on `:9000`, pgAdmin on `:443`. Credentials live in Portainer's stack env, never in the
 repo. If a redeploy fails, read Portainer's own log first:
 `docker logs --since 1h portainer | grep -i -E "error|denied"`.
+
+## The coach (`coach/`)
+
+A second service from the same image: Claude Code in Remote Control server mode, run as
+`node`, with its own manual (`coach/CLAUDE.md`), skills and tools (`coach/bin`). It only
+writes to `/coach/data` (volume) and to the log through the API; its DB role `coach_ro` is
+SELECT-only. Its plan data comes from the live `/pages` mount, not the image. Personal
+files (profile, imported conversations, phone notes) never enter the repo — `coach/data/`
+is gitignored. When changing the API, keep `coach/CLAUDE.md`'s tool table and
+`coach/bin/*.mjs` in step.
 
 ## Things that have bitten before
 

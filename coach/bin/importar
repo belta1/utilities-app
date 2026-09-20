@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Import a phone-notes log file into the workout log (dry run unless --apply).
+#   importar data/notas/2026-09.txt
+#   importar data/notas/2026-09.txt --apply
+exec node /app/scripts/import-sesiones.mjs "$@"

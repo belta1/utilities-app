@@ -1,0 +1,32 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(api:*)",
+      "Bash(sql:*)",
+      "Bash(hoy:*)",
+      "Bash(semana:*)",
+      "Bash(importar:*)",
+      "Bash(date:*)",
+      "Bash(cat:*)",
+      "Bash(ls:*)",
+      "Read(//coach/**)",
+      "Read(//app/**)",
+      "Read(//pages/**)",
+      "Edit(//coach/data/**)",
+      "Write(//coach/data/**)"
+    ],
+    "deny": [
+      "Bash(rm -rf:*)",
+      "Bash(sudo:*)",
+      "Bash(curl:*)",
+      "Bash(node:*)",
+      "Edit(//app/**)",
+      "Write(//app/**)",
+      "Edit(//pages/**)",
+      "Write(//pages/**)",
+      "Edit(//coach/CLAUDE.md)",
+      "Edit(//coach/.claude/**)",
+      "Write(//coach/.claude/**)"
+    ]
+  }
+}

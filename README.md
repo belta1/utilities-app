@@ -545,10 +545,64 @@ What's inside: [`coach/README.md`](coach/README.md). The manual it follows:
    out of the repo). `data/PROFILE.md` is created from `coach/PROFILE.example.md` on
    first start; edit it in place the same way, or just tell the coach.
 
+### Finding it in the app
+
+Claude mobile app → **Code** tab → session list → **Coach RECOMP** (computer icon, green dot
+when online). Or claude.ai/code in a browser. `docker logs coach --tail 20` on the server
+prints the session URL; opening it lands directly in the session. It is one conversation,
+shared by every device; the container keeps running when you close the app.
+
+### What you can ask it
+
+Talk to it in Spanish (or anything), plainly. Slash commands run a fixed routine; free
+text works too — it recognizes what you mean and uses the same tools.
+
+| You say | What it does | Behind the scenes |
+|---|---|---|
+| `/hoy` · "¿qué toca hoy?" · "¿qué hago el martes?" | The session for today's plan day (or the day you name), as a checklist: exercise → **target load × reps** → one cue, then the post-workout meal. On Fridays it says which rotation week it is. | Runs `hoy`: reads the plan from `/pages/_lib/recomp/data.jsx`, the last 3 sessions of each exercise from `GET /api/exercises/:id/sessions`, and computes a target per exercise (rules below). |
+| "ok, guarda los objetivos" · "de acuerdo" | Writes the targets so the training tab shows **OBJETIVO** on each card. | `hoy --guardar` → `PUT /api/exercises/:id/target`, `set_by: hoy`. |
+| "banca 40x8 x4 rir2" · "hice press militar 6.5 kg 10 10 9 10" · "plancha 60s x3" · "3 series de 12 con 15 en remo unilateral" | Parses sets, shows a table (exercise · kg · reps or s · RIR · n), asks **¿confirmo?**, logs them, reads the day back. If you gave no RIR it asks once ("¿cuántas te quedaban?"). Then tells you what those sets mean for next time. | `POST /api/sets` per set, `GET /api/sets?date=` after. Names are matched to the catalog (accents ignored); if ambiguous it asks with two options; unknown → offers `POST /api/exercises`. |
+| "eso fue ayer" · "el martes hice…" | Same, for another date. | `date` in the body. |
+| "borra la última serie" · "la S3 fueron 9 reps, no 8" | Fixes or deletes a set, after confirming which one. | `PATCH` / `DELETE /api/sets/:id`. |
+| "¿cuánto pongo en peso muerto?" · "¿subo la banca?" | The target and the reason (rule + numbers: last sessions, e1RM trend, RIR). | Same model as `/hoy`, for one exercise. |
+| "me duele la lumbar" · "dormí 5 horas" · "estoy de viaje sin barra" | Adjusts today's advice: substitutions the plan already has (deadlift → RDL con mancuernas), holds loads, and records the override with its reason so the dashboard shows it. Never coaches through sharp pain. | `PUT /api/exercises/:id/target` with `reason`; durable facts go to `data/PROFILE.md`. |
+| `/revision` · "¿cómo voy?" · "resumen de la semana" | Adherence vs the plan's 6 days, volume by empuje / halar / pierna vs last week, PRs (e1RM ▲), stalled exercises with what it would change, plank trend; ends with ≤ 3 concrete changes or "sin cambios". Decisions are written to `data/history/coach-notes.md`. | `semana` (`--days 14` for two weeks, a date for a past week). |
+| "pesé 77.1 y 20.8 %" | Records the measurement with the date in `data/PROFILE.md` and compares with the goal line (21.6 % → 16 %). | Profile file in the `coach_data` volume. |
+| `/importar` + pasted phone notes (`[07:27, 9/1/2026]` … format) | Saves the paste to `data/notas/`, dry-runs the import, shows the mapping (your shorthand → catalog name), asks **¿aplico?**, imports. Re-running skips what is already logged. | `importar` → `scripts/import-sesiones.mjs` → `POST /api/sets`. |
+| "¿qué dijimos sobre X?" · "¿por qué el plan no tiene dominadas?" | Answers from the earlier claude.ai conversation and its own notes. | Reads `data/history/*.md`. |
+| "¿cuántas series de pierna hice en septiembre?" | Ad-hoc questions over the whole log. | `sql "select …"` as the read-only role, or the API. |
+| "guarda esto en history/" + a pasted conversation | Keeps it for future context. | Writes under `data/history/`. |
+
+What it will not do: invent a number that is not in the log or the plan; log anything
+without showing it first; change the plan itself (the plan is a file in the repo, edited
+on your PC — it will note suggested changes under "App" in `coach-notes.md`); touch the app
+code or the database directly (SELECT only; writes go through the API's validation).
+
+### How it chooses a load
+
+`coach/bin/hoy.mjs` — deterministic, so the same history always gives the same target.
+Per exercise, using the last sessions and the plan's rep range (e.g. `6–8`):
+
+1. **Stall** — best e1RM (Epley: load × (1 + reps/30), best set of a session) has not
+   improved ≥ 1 % over the last 3 sessions → deload −10 % and rebuild, or change the rep
+   range. If the weight is too light to deload meaningfully (5 kg dumbbells), keep it and
+   raise the rep target instead.
+2. **Out of range** — every set above the range → at least one step up (or the e1RM load
+   for top + 1 reps if higher); every set below → the e1RM load that leaves ~2 reps in
+   reserve at the top of the range.
+3. **Topped out** (every set at the top of the range) — with **RIR ≥ 2** logged → +1 step
+   now; RIR 0–1 → repeat (the reps were forced); no RIR logged → +1 step only if the
+   previous session also topped out.
+4. Any set **under the bottom** of the range → −5 %.
+5. Otherwise **repeat** the load and add reps.
+
+Steps: +2.5 kg barbell / cable / machine, +1 kg per dumbbell. Timed sets (planks): reach
+the plan's seconds, then +5 s per session. Target effort is RIR 2; the last set of a
+compound may go to 1. `hoy` prints the rule it applied next to each target, and the
+coach quotes it.
+
 ### Operating it
 
-- From the phone: `/hoy`, `/registrar` (or just "hice banca 40x8 x4"), `/revision`,
-  `/importar`. It always shows what it is about to log and asks *¿confirmo?* first.
 - It restarts itself if the Remote Control server exits (network outage > 10 min) and
   Docker restarts the container on failure. If it is offline in the app:
   `docker logs coach --tail 20`.
@@ -557,6 +611,7 @@ What's inside: [`coach/README.md`](coach/README.md). The manual it follows:
 - Updating Claude Code = rebuild the image (`ARG CLAUDE_VERSION`, default `latest` at build
   time) — every push does that.
 - Reset the login: `docker volume rm exercise-app_coach_home` with the stack stopped.
+- Copy its data out: `docker cp coach:/coach/data ./coach-data-backup`.
 
 ## 11. Troubleshooting
 

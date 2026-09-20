@@ -12,8 +12,7 @@
       "Read(//coach/**)",
       "Read(//app/**)",
       "Read(//pages/**)",
-      "Edit(//coach/data/**)",
-      "Write(//coach/data/**)"
+      "Edit(//coach/data/**)"
     ],
     "deny": [
       "Bash(rm -rf:*)",
@@ -21,12 +20,9 @@
       "Bash(curl:*)",
       "Bash(node:*)",
       "Edit(//app/**)",
-      "Write(//app/**)",
       "Edit(//pages/**)",
-      "Write(//pages/**)",
       "Edit(//coach/CLAUDE.md)",
-      "Edit(//coach/.claude/**)",
-      "Write(//coach/.claude/**)"
+      "Edit(//coach/.claude/**)"
     ]
   }
 }

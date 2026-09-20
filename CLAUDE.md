@@ -77,6 +77,10 @@ plain CSS (`indexPage()` in `server.mjs`) — keep the two in sync if tokens cha
   `YYYY-MM-DD` via `to_char`.
 - A set is `reps` or `duration_s` (timed, e.g. planks), never both; the UI toggles REPS/SEG and
   defaults from the previous set or the plan ("seg" in the plan reps). `volume()` ignores timed sets.
+  `rir` (reps in reserve, 0–5) is optional and drives the coach's progression.
+- `exercise_targets` (one row per exercise) is what the training cards show as OBJETIVO; the
+  coach writes it (`hoy --guardar` or `PUT /api/exercises/:id/target`). Progression logic lives
+  in `coach/bin/hoy.mjs` (e1RM, RIR, stall/deload), not in the server.
 
 ## Scripts
 

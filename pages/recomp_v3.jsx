@@ -73,6 +73,28 @@ function useSets(date) {
   };
 }
 
+// Coach-set targets ("what to lift next time"), keyed by exercise id. Refetched
+// whenever the day's sets change, since the coach writes them around the session.
+function useTargets(dep) {
+  const [byId, setById] = useState({});
+  useEffect(() => {
+    let live = true;
+    api("GET", "/api/targets").then((rows) => live && setById(Object.fromEntries(rows.map((t) => [t.exercise_id, t])))).catch(() => {});
+    return () => { live = false; };
+  }, [dep]);
+  return byId;
+}
+
+const TargetLine = ({ target, accent }) => (
+  <div title={target.reason ?? ""} style={{ display: "flex", alignItems: "baseline", gap: 6, marginTop: 7, padding: "5px 9px", background: accent + "12", border: `1px solid ${accent}33`, borderRadius: 7 }}>
+    <span style={{ fontSize: 7, color: accent, letterSpacing: 1.5, fontFamily: MONO, flexShrink: 0 }}>OBJETIVO</span>
+    <span style={{ fontSize: 12, fontFamily: GROT, fontWeight: 700, color: T.bone, flexShrink: 0 }}>
+      {target.load_kg != null && <>{target.load_kg}<span style={{ fontSize: 9, color: T.ash }}>kg</span></>}{target.load_kg != null && target.reps && " × "}{target.reps}
+    </span>
+    {target.reason && <span style={{ fontSize: 9, color: T.ash, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{target.reason}</span>}
+  </div>
+);
+
 // Most recent earlier session for an exercise (for "ultima vez" and prefill).
 function useLastSession(exerciseId, before) {
   const [last, setLast] = useState(null);
@@ -135,6 +157,7 @@ const SetChip = ({ set, accent, onRemove }) => (
         ? <>{set.load_kg > 0 && <>{set.load_kg}<span style={{ fontSize: 9, color: T.ash }}>kg</span> · </>}{set.duration_s}<span style={{ fontSize: 9, color: T.ash }}>s</span></>
         : <>{set.load_kg}<span style={{ fontSize: 9, color: T.ash }}>kg</span> × {set.reps}</>}
     </span>
+    {set.rir != null && <span title="Reps en reserva" style={{ fontSize: 8, color: set.rir === 0 ? "#D98A8A" : T.ash, fontFamily: MONO }}>R{set.rir}</span>}
     {onRemove && <button onClick={onRemove} title="Borrar serie" style={{ background: "none", border: "none", color: T.faint, cursor: "pointer", fontSize: 11, padding: "0 2px" }}>✕</button>}
   </div>
 );
@@ -153,8 +176,10 @@ const SetLogger = ({ exercise, accent, sets, log, date, timed = false }) => {
   const prevN = prev ? (mode === "time" ? prev.duration_s : prev.reps) : null;
   const kgVal = kg === "" ? (prev?.load_kg ?? (mode === "time" ? 0 : undefined)) : Number(kg.replace(",", "."));
   const nVal = n === "" ? prevN : Number(n);
-  const ok = Number.isFinite(kgVal) && kgVal >= 0 && Number.isInteger(nVal) && nVal > 0;
-  const submit = () => log.add({ exercise_id: exercise.id, load_kg: kgVal, [mode === "time" ? "duration_s" : "reps"]: nVal });
+  const [rir, setRir] = useState("");                 // reps in reserve, optional (0–5)
+  const rirVal = rir === "" ? null : Number(rir);
+  const ok = Number.isFinite(kgVal) && kgVal >= 0 && Number.isInteger(nVal) && nVal > 0 && (rirVal === null || (Number.isInteger(rirVal) && rirVal >= 0 && rirVal <= 5));
+  const submit = () => log.add({ exercise_id: exercise.id, load_kg: kgVal, [mode === "time" ? "duration_s" : "reps"]: nVal, rir: rirVal });
 
   return (
     <div style={{ background: T.bg, border: `1px solid ${accent}55`, borderRadius: 9, padding: "10px 12px" }} onClick={(e) => e.stopPropagation()}>
@@ -174,13 +199,20 @@ const SetLogger = ({ exercise, accent, sets, log, date, timed = false }) => {
       <div style={{ display: "flex", gap: 7, alignItems: "flex-end" }}>
         <NumField label="CARGA KG" value={kg} onChange={setKg} placeholder={prev ? String(prev.load_kg) : mode === "time" ? "0" : "kg"} step={0.5} accent={accent} />
         <NumField label={mode === "time" ? "SEGUNDOS" : "REPS"} value={n} onChange={setN} placeholder={prevN != null ? String(prevN) : mode === "time" ? "seg" : "reps"} accent={accent} />
-        <button onClick={() => { setMode(mode === "time" ? "reps" : "time"); setN(""); }} title="Cambiar reps / segundos" style={{
-          alignSelf: "flex-end", background: T.surface, border: `1px solid ${T.line}`, borderRadius: 8, padding: "9px 7px", cursor: "pointer",
+        {mode === "reps" && (
+          <label style={{ flex: "0 0 46px", minWidth: 0 }} title="Reps en reserva al terminar la serie (0 = fallo)">
+            <Label style={{ marginBottom: 4 }}>RIR</Label>
+            <input type="number" inputMode="numeric" min={0} max={5} value={rir} placeholder="–" onChange={(e) => setRir(e.target.value)}
+              style={{ ...inputStyle, padding: "8px 6px", textAlign: "center", borderColor: rir !== "" ? accent + "88" : T.line }} />
+          </label>
+        )}
+        <button onClick={() => { setMode(mode === "time" ? "reps" : "time"); setN(""); setRir(""); }} title="Cambiar reps / segundos" style={{
+          alignSelf: "flex-end", background: T.surface, border: `1px solid ${T.line}`, borderRadius: 8, padding: "9px 6px", cursor: "pointer",
           fontFamily: MONO, fontSize: 8, letterSpacing: 1, color: T.ash, whiteSpace: "nowrap",
         }}>
           <span style={{ color: mode === "reps" ? accent : T.faint }}>REPS</span>/<span style={{ color: mode === "time" ? accent : T.faint }}>SEG</span>
         </button>
-        <Btn accent={accent} disabled={!ok || log.busy} onClick={submit}>+ SERIE {sets.length + 1}</Btn>
+        <Btn accent={accent} disabled={!ok || log.busy} onClick={submit} style={{ padding: "9px 10px" }}>+ S{sets.length + 1}</Btn>
       </div>
       {log.error && <div style={{ marginTop: 6, fontSize: 10, color: "#D98A8A" }}>{log.error}</div>}
     </div>
@@ -196,6 +228,7 @@ const TrainingTab = ({ exercises, today }) => {
   const [activeDay, setActiveDay] = useState(0);
   const [expandedEx, setExpandedEx] = useState(null);
   const log = useSets(today);
+  const targets = useTargets(log.sets);
   const typeLabel = { strength: "FUERZA", lesmills: "CARDIO", recovery: "BALANCE", core: "CORE", rest: "OFF" };
   const sel = days[activeDay];
   const accent = dayAccent(sel.type);
@@ -293,6 +326,7 @@ const TrainingTab = ({ exercises, today }) => {
                         ))}
                       </div>
                     )}
+                    {dbEx && targets[dbEx.id] && <TargetLine target={targets[dbEx.id]} accent={accent} />}
                     {isExp && (
                       <div style={{ marginTop: 9, display: "flex", flexDirection: "column", gap: 8 }}>
                         {dbEx && today && <SetLogger exercise={dbEx} accent={accent} sets={done} log={log} date={today} timed={/seg/i.test(ex.reps)} />}
@@ -368,6 +402,7 @@ const TrainingTab = ({ exercises, today }) => {
                             </div>
                           ))}
                         </div>
+                        {dbEx && targets[dbEx.id] && <TargetLine target={targets[dbEx.id]} accent={T.gold} />}
                         {isExp && dbEx && today && (
                           <div style={{ marginTop: 9 }}>
                             <SetLogger exercise={dbEx} accent={T.gold} sets={done} log={log} date={today} timed={/seg/i.test(ex.reps)} />

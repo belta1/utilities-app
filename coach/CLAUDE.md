@@ -20,11 +20,13 @@ Sources of truth, in this order:
 
 | Command | Use |
 |---|---|
-| `hoy [YYYY-MM-DD] [--day martes] [--json]` | Today's plan day with last two sessions per exercise, what's logged so far, and a load suggestion from the progression rule. **Run this before coaching a session.** |
-| `semana [YYYY-MM-DD] [--days N] [--json]` | Weekly numbers: sessions, volume by pattern, best set per exercise vs previous period, missed plan days. |
+| `hoy [YYYY-MM-DD] [--day martes] [--guardar] [--json]` | Today's plan day: last 3 sessions per exercise (with RIR when logged), e1RM trend, what's logged so far, and a load target with its reason (stall/deload, e1RM-derived, RIR, two-session rule). **Run this before coaching a session.** `--guardar` writes the targets to the DB so the dashboard cards show them — do it once you agree with them. |
+| `semana [YYYY-MM-DD] [--days N] [--json]` | Weekly numbers: sessions, volume by pattern, best set and e1RM per exercise vs the previous period (▲▼), missed plan days. |
 | `api GET /api/sets?date=…` · `api GET /api/exercises` · `api GET /api/exercises/<id>/last?before=…` | Read the log. |
-| `api POST /api/sets '{"exercise_id":1,"load_kg":40,"reps":8,"date":"…"}'` | Log a set. Timed set: `{"exercise_id":26,"duration_s":60}`. One of `reps` / `duration_s`, `load_kg` 0 for bodyweight. `date` defaults to today. |
+| `api POST /api/sets '{"exercise_id":1,"load_kg":40,"reps":8,"rir":2,"date":"…"}'` | Log a set. `rir` (reps in reserve, 0–5) is optional but ask for it — it drives the progression. Timed set: `{"exercise_id":26,"duration_s":60}`. One of `reps` / `duration_s`; `load_kg` 0 for bodyweight; `date` defaults to today. |
 | `api PATCH /api/sets/<id> '{"reps":9}'` · `api DELETE /api/sets/<id>` | Fix or remove a set. |
+| `api GET /api/exercises/<id>/sessions?before=…&limit=6` | Last N sessions of one exercise with their sets — what `hoy` uses. |
+| `api GET /api/targets` · `api PUT /api/exercises/<id>/target '{"load_kg":42.5,"reps":"6–8","reason":"…"}'` · `api DELETE /api/exercises/<id>/target` | The target shown on the dashboard card. `hoy --guardar` writes them for you; PUT one yourself when you override (pain, sleep, equipment) and say why in `reason`. |
 | `api POST /api/exercises '{"name":"…","muscle_group":"…","equipment":"…"}'` | Add an exercise that is not in the catalog (81 exist — check `api GET /api/exercises` first). |
 | `sql "select …"` | Read-only SQL (role `coach_ro`, SELECT only) when the API has no route for it. Writes go through the API. |
 | `importar data/notas/<file> [--apply]` | Import a phone-notes log; dry run first, always. |
@@ -45,11 +47,14 @@ dumbbells; volume = load × reps, timed sets add none.
   "✓ S3 40×8"). Unknown exercise names: match to the catalog
   (accents/case don't matter, see aliases in `/app/scripts/import-sesiones.mjs`);
   if ambiguous, ask with two options, don't guess.
-- **Progression**: the rule is in `hoy` — top of the rep range on every set two sessions
-  running → +2.5 kg (barbell/cable/machine) or +1 kg per dumbbell; under the bottom of
-  the range → −5 %; otherwise repeat. RPE target 2 reps in reserve, last set of a
-  compound may go to 1. Don't override the rule silently; if you deviate (pain, sleep,
-  travel), say why.
+- **Progression**: `hoy` decides, in this order — stalled 3 sessions (e1RM flat) → deload
+  −10 % or change the rep range; last session outside the plan's range → load from e1RM
+  for top-of-range + 2 reps; every set at the top with RIR ≥ 2 → +2.5 kg (barbell/cable/
+  machine) or +1 kg per dumbbell, with RIR 0–1 → repeat, without RIR → needs two topped
+  sessions; a set under the bottom → −5 %; else repeat and add reps. Target effort is
+  RIR 2, last set of a compound may go to 1. Ask for RIR when he logs; without it the
+  model is half blind. Don't override silently — if you deviate (pain, sleep, travel),
+  write the override with `api PUT …/target` and its `reason`.
 - **Weekly review** (`/revision`): run `semana`, then interpret: adherence vs plan, which
   pattern lagged, PRs, what to change next week (usually nothing — consistency first).
 - **Safety**: lumbar history (see PROFILE). Deadlift is skipped for RDL with dumbbells on

@@ -38,7 +38,7 @@ function summarize(sets) {
   const best = {};
   for (const s of sets) {
     const b = best[s.exercise_id];
-    const key = s.duration_s ? s.duration_s : s.load_kg * 1000 + s.reps;   // heaviest load, then reps
+    const key = s.duration_s ? s.duration_s : s.load_kg * (1 + s.reps / 30);   // seconds, or Epley e1RM
     if (!b || key > b.key) best[s.exercise_id] = { key, set: s };
   }
   return { sessions: byDay.size, days: [...byDay.keys()].sort(), sets: sets.length, volume: Math.round(vol(sets)), byPattern, best };
@@ -52,11 +52,11 @@ const planned = days.filter((d) => d.type !== "rest" && !d.optional).map((d) => 
 const missed = N === 7 ? planned.filter((d) => !trained.has(d)) : [];
 
 const fmt = (s) => (s.duration_s ? `${s.duration_s}s` : `${s.load_kg}kg×${s.reps}`);
-const compare = Object.entries(C.best).map(([id, { set }]) => {
-  const p = P.best[id]?.set;
+const compare = Object.entries(C.best).map(([id, { key, set }]) => {
+  const p = P.best[id];
   const e = byId[id];
-  const up = p ? (set.duration_s ? set.duration_s - p.duration_s : set.load_kg - p.load_kg) : null;
-  return { name: e?.name ?? id, best: fmt(set), prevBest: p ? fmt(p) : null, delta: up };
+  const delta = p ? key - p.key : null;                           // s for timed, kg of e1RM otherwise
+  return { name: e?.name ?? id, best: fmt(set), e1rm: set.duration_s ? null : Number(key.toFixed(1)), prevBest: p ? fmt(p.set) : null, prevE1rm: p && !p.set.duration_s ? Number(p.key.toFixed(1)) : null, delta };
 }).sort((a, b) => (b.delta ?? -Infinity) - (a.delta ?? -Infinity));
 
 const out = { period: { start, end }, previous: { start: pStart, end: pEnd }, current: { ...C, best: undefined }, previousSummary: { sessions: P.sessions, sets: P.sets, volume: P.volume, byPattern: P.byPattern }, missedPlanDays: missed, bestSets: compare };
@@ -69,5 +69,10 @@ console.log(`dias: ${C.days.map((d) => `${weekdayOf(d).slice(0, 3)} ${d.slice(5)
 if (N === 7) console.log(`plan sin sesion: ${missed.length ? missed.join(", ") : "ninguno — semana completa"}`);
 console.log("volumen por patron:");
 for (const p of ["empuje", "halar", "pierna", "core", "otros"]) if (C.byPattern[p] != null || P.byPattern[p] != null) console.log(`   ${p.padEnd(7)} ${Math.round(C.byPattern[p] ?? 0)} kg (${Math.round(P.byPattern[p] ?? 0)})`);
-console.log("mejor serie por ejercicio (vs periodo anterior):");
-for (const r of compare) console.log(`   ${r.delta != null && r.delta > 0 ? "▲" : r.delta != null && r.delta < 0 ? "▼" : " "} ${r.name.padEnd(40)} ${r.best.padStart(10)}${r.prevBest ? `   antes ${r.prevBest}` : "   (nuevo)"}`);
+console.log("mejor serie por ejercicio, e1RM (vs periodo anterior):");
+for (const r of compare) {
+  const arrow = r.delta != null && r.delta > 0.4 ? "▲" : r.delta != null && r.delta < -0.4 ? "▼" : " ";
+  const now = r.e1rm != null ? `${r.best} → e1RM ${r.e1rm}` : r.best;
+  const before = r.prevBest ? `   antes ${r.prevE1rm != null ? `e1RM ${r.prevE1rm}` : r.prevBest}${r.delta != null ? ` (${r.delta > 0 ? "+" : ""}${r.delta.toFixed(1)})` : ""}` : "   (nuevo)";
+  console.log(`   ${arrow} ${r.name.padEnd(40)} ${now.padStart(24)}${before}`);
+}

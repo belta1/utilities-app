@@ -310,6 +310,7 @@ JSON over HTTP, no authentication. All dates are `YYYY-MM-DD`. Errors return
 | `GET` | `/api/exercises` | Full catalog with inline `svg`. Favorites first, then `sort_order`. |
 | `POST` | `/api/exercises` | Body `{ name, muscle_group?, equipment?, image_key? }`. Idempotent on name (slug). |
 | `GET` | `/api/exercises/:id/last?before=DATE` | Sets from the most recent session strictly before `before` (or the latest overall if omitted). `null` if none. |
+| `GET` | `/api/exercises/:id/sessions?before=DATE&limit=N` | The last N sessions (default 6, max 50) strictly before `before`, newest first, each `{ performed_on, sets: […] }`. What the coach's progression model reads. |
 
 ### Sets
 
@@ -317,8 +318,8 @@ JSON over HTTP, no authentication. All dates are `YYYY-MM-DD`. Errors return
 |---|---|---|
 | `GET` | `/api/sets?date=DATE` | Sets logged that day, in logging order |
 | `GET` | `/api/sets?from=DATE&to=DATE` | Inclusive range, newest day first |
-| `POST` | `/api/sets` | Body `{ exercise_id, load_kg?, reps, date?, note? }` or, for a timed set (plank), `{ exercise_id, load_kg?, duration_s, date?, note? }` — exactly one of `reps` / `duration_s`; `load_kg` defaults to 0. `date` defaults to today (server time). `set_number` is assigned: next number for that exercise on that day. |
-| `PATCH` | `/api/sets/:id` | Body: any of `load_kg`, `reps`, `duration_s`, `note` (sending `reps` or `duration_s` switches the set to that kind) |
+| `POST` | `/api/sets` | Body `{ exercise_id, load_kg?, reps, rir?, date?, note? }` (`rir` = reps in reserve 0–5) or, for a timed set (plank), `{ exercise_id, load_kg?, duration_s, date?, note? }` — exactly one of `reps` / `duration_s`; `load_kg` defaults to 0. `date` defaults to today (server time). `set_number` is assigned: next number for that exercise on that day. |
+| `PATCH` | `/api/sets/:id` | Body: any of `load_kg`, `reps`, `duration_s`, `rir`, `note` (sending `reps` or `duration_s` switches the set to that kind) |
 | `DELETE` | `/api/sets/:id` | |
 
 A set looks like:
@@ -327,7 +328,7 @@ A set looks like:
 {
   "id": 42, "exercise_id": 1, "exercise_name": "Press banca con barra", "image_key": "press_banca",
   "performed_on": "2026-09-19", "set_number": 2, "load_kg": 42.5, "reps": 8,
-  "duration_s": null, "note": null, "logged_at": "2026-09-19T17:10:23.285Z"
+  "duration_s": null, "rir": 2, "note": null, "logged_at": "2026-09-19T17:10:23.285Z"
 }
 ```
 
@@ -339,6 +340,17 @@ curl -s -X POST localhost:3000/api/sets -H 'content-type: application/json' \
   -d '{"exercise_id":1,"load_kg":42.5,"reps":8}'
 curl -s "localhost:3000/api/sets?date=2026-09-19" | jq
 ```
+
+### Targets
+
+What to lift next time, one row per exercise, shown on the training tab's cards as
+**OBJETIVO**. Written by the coach (`hoy --guardar`, or by hand with a reason).
+
+| Method | Path | Notes |
+|---|---|---|
+| `GET` | `/api/targets` | All targets with `exercise_name`. |
+| `PUT` | `/api/exercises/:id/target` | Body `{ load_kg?, reps?, reason?, set_by?, set_on? }` (at least one of `load_kg` / `reps`). Upserts. |
+| `DELETE` | `/api/exercises/:id/target` | |
 
 ### Other routes
 
@@ -363,7 +375,10 @@ exercises         id, slug (unique), name, muscle_group, equipment,
                   is_favorite, sort_order, image_key ──┘, created_at
                     │
 workout_sets      id, exercise_id ──┘, performed_on (date), set_number,
-                  load_kg numeric(6,2) ≥ 0, reps int > 0 | duration_s int > 0 (one of the two), note, logged_at
+                  load_kg numeric(6,2) ≥ 0, reps int > 0 | duration_s int > 0 (one of the two),
+                  rir smallint 0–5 (reps in reserve, optional), note, logged_at
+                    │
+exercise_targets  exercise_id ──┘ (PK), load_kg, reps text, reason, set_by, set_on, updated_at
                   indexes: (performed_on), (exercise_id, performed_on)
 ```
 

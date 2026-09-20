@@ -40,7 +40,7 @@ const EXERCISE_COLS = `
 const SET_COLS = `
   s.id, s.exercise_id, e.name AS exercise_name, e.image_key,
   to_char(s.performed_on, 'YYYY-MM-DD') AS performed_on,
-  s.set_number, s.load_kg, s.reps, s.duration_s, s.note, s.logged_at`;
+  s.set_number, s.load_kg, s.reps, s.duration_s, s.rir, s.note, s.logged_at`;
 
 // ── handlers ──────────────────────────────────────────────────────
 
@@ -115,16 +115,80 @@ async function createSet(body) {
   const { reps, duration } = asSetMeasure(body);
   const date = asDate(body.date, "date");
   const note = asText(body.note, "note", { max: 500 });
+  const rir = asRir(body.rir);
   const { rows } = await query(
     `WITH ins AS (
-       INSERT INTO workout_sets (exercise_id, performed_on, set_number, load_kg, reps, duration_s, note)
-       SELECT $1, d, coalesce((SELECT max(set_number) FROM workout_sets WHERE exercise_id = $1 AND performed_on = d), 0) + 1, $3, $4, $5, $6
+       INSERT INTO workout_sets (exercise_id, performed_on, set_number, load_kg, reps, duration_s, note, rir)
+       SELECT $1, d, coalesce((SELECT max(set_number) FROM workout_sets WHERE exercise_id = $1 AND performed_on = d), 0) + 1, $3, $4, $5, $6, $7
        FROM (SELECT coalesce($2::date, current_date) AS d) x
        RETURNING *)
      SELECT ${SET_COLS} FROM ins s JOIN exercises e ON e.id = s.exercise_id`,
-    [exerciseId, date, loadKg, reps, duration, note],
+    [exerciseId, date, loadKg, reps, duration, note, rir],
   );
   return rows[0];
+}
+
+// reps in reserve: 0 (failure) to 5, or null when not recorded
+function asRir(v) {
+  if (optional(v)) return null;
+  const n = asNumber(v, "rir", { min: 0, integer: true });
+  if (n > 5) throw bad("rir must be 0–5");
+  return n;
+}
+
+// Last N sessions of an exercise (newest first), each with its sets in order — what a
+// progression model needs, in one call. `before` excludes that date and later ones.
+async function sessions(exerciseId, before, limit) {
+  const { rows } = await query(
+    `SELECT ${SET_COLS}
+     FROM workout_sets s JOIN exercises e ON e.id = s.exercise_id
+     WHERE s.exercise_id = $1
+       AND s.performed_on IN (
+         SELECT DISTINCT performed_on FROM workout_sets
+         WHERE exercise_id = $1 AND ($2::date IS NULL OR performed_on < $2::date)
+         ORDER BY performed_on DESC LIMIT $3)
+     ORDER BY s.performed_on DESC, s.set_number`,
+    [exerciseId, before, limit],
+  );
+  const out = [];
+  for (const s of rows) {
+    if (!out.length || out[out.length - 1].performed_on !== s.performed_on) out.push({ performed_on: s.performed_on, sets: [] });
+    out[out.length - 1].sets.push(s);
+  }
+  return out;
+}
+
+// ── targets: what to lift next time, per exercise ─────────────────
+
+const TARGET_COLS = `t.exercise_id, e.name AS exercise_name, t.load_kg, t.reps, t.reason, t.set_by,
+  to_char(t.set_on, 'YYYY-MM-DD') AS set_on, t.updated_at`;
+
+async function listTargets() {
+  const { rows } = await query(`SELECT ${TARGET_COLS} FROM exercise_targets t JOIN exercises e ON e.id = t.exercise_id ORDER BY e.name`);
+  return rows;
+}
+
+async function putTarget(exerciseId, body) {
+  const loadKg = optional(body.load_kg) ? null : asNumber(body.load_kg, "load_kg", { min: 0 });
+  const reps = asText(body.reps, "reps", { max: 40 });
+  if (loadKg == null && !reps) throw bad("pass load_kg and/or reps");
+  const { rows } = await query(
+    `WITH up AS (
+       INSERT INTO exercise_targets (exercise_id, load_kg, reps, reason, set_by, set_on)
+       VALUES ($1, $2, $3, $4, coalesce($5, 'coach'), coalesce($6::date, current_date))
+       ON CONFLICT (exercise_id) DO UPDATE SET load_kg = EXCLUDED.load_kg, reps = EXCLUDED.reps,
+         reason = EXCLUDED.reason, set_by = EXCLUDED.set_by, set_on = EXCLUDED.set_on, updated_at = now()
+       RETURNING *)
+     SELECT ${TARGET_COLS} FROM up t JOIN exercises e ON e.id = t.exercise_id`,
+    [exerciseId, loadKg, reps, asText(body.reason, "reason", { max: 300 }), asText(body.set_by, "set_by", { max: 40 }), asDate(body.set_on, "set_on")],
+  );
+  return rows[0];
+}
+
+async function deleteTarget(exerciseId) {
+  const { rowCount } = await query("DELETE FROM exercise_targets WHERE exercise_id = $1", [exerciseId]);
+  if (!rowCount) throw new ApiError(404, "no target for that exercise");
+  return { deleted: exerciseId };
 }
 
 async function updateSet(id, body) {
@@ -142,6 +206,7 @@ async function updateSet(id, body) {
     set("duration_s", duration);
   }
   if ("note" in body) set("note", asText(body.note, "note", { max: 500 }));
+  if ("rir" in body) set("rir", asRir(body.rir));
   if (!fields.length) throw bad("nothing to update");
   const { rows } = await query(
     `WITH upd AS (UPDATE workout_sets SET ${fields.join(", ")} WHERE id = $1 RETURNING *)
@@ -164,6 +229,10 @@ const routes = [
   ["GET", /^\/api\/exercises$/, () => listExercises()],
   ["POST", /^\/api\/exercises$/, (_m, _q, body) => createExercise(body)],
   ["GET", /^\/api\/exercises\/(\d+)\/last$/, (m, q) => lastSession(Number(m[1]), asDate(q.get("before"), "before"))],
+  ["GET", /^\/api\/exercises\/(\d+)\/sessions$/, (m, q) => sessions(Number(m[1]), asDate(q.get("before"), "before"), Math.min(asNumber(q.get("limit") ?? 6, "limit", { min: 1, integer: true }), 50))],
+  ["GET", /^\/api\/targets$/, () => listTargets()],
+  ["PUT", /^\/api\/exercises\/(\d+)\/target$/, (m, _q, body) => putTarget(Number(m[1]), body)],
+  ["DELETE", /^\/api\/exercises\/(\d+)\/target$/, (m) => deleteTarget(Number(m[1]))],
   ["GET", /^\/api\/sets$/, (_m, q) => listSets({ date: asDate(q.get("date"), "date"), from: asDate(q.get("from"), "from"), to: asDate(q.get("to"), "to") })],
   ["POST", /^\/api\/sets$/, (_m, _q, body) => createSet(body)],
   ["PATCH", /^\/api\/sets\/(\d+)$/, (m, _q, body) => updateSet(Number(m[1]), body)],
@@ -181,7 +250,7 @@ export async function handleApi(req, res, url, readBody) {
     const route = routes.find(([method, re]) => method === req.method && re.test(url.pathname));
     if (!route) return sendJson(404, { error: "not found" }), true;
     let body = {};
-    if (req.method === "POST" || req.method === "PATCH") {
+    if (req.method === "POST" || req.method === "PATCH" || req.method === "PUT") {
       const raw = await readBody(req);
       try {
         body = raw ? JSON.parse(raw) : {};

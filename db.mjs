@@ -60,6 +60,22 @@ const SCHEMA = `
       ALTER TABLE workout_sets ADD CONSTRAINT workout_sets_reps_or_time CHECK (reps IS NOT NULL OR duration_s IS NOT NULL);
     END IF;
   END $$;
+
+  -- Reps in reserve at the end of the set (0 = failure). Optional; the coach's
+  -- progression uses it when present.
+  ALTER TABLE workout_sets ADD COLUMN IF NOT EXISTS rir smallint CHECK (rir BETWEEN 0 AND 5);
+
+  -- What to lift next time, per exercise, written by the coach (or hoy --guardar) and
+  -- shown on the training tab. One row per exercise; overwritten, never appended.
+  CREATE TABLE IF NOT EXISTS exercise_targets (
+    exercise_id   integer PRIMARY KEY REFERENCES exercises(id) ON DELETE CASCADE,
+    load_kg       numeric(6,2) CHECK (load_kg >= 0),
+    reps          text,
+    reason        text,
+    set_by        text NOT NULL DEFAULT 'coach',
+    set_on        date NOT NULL DEFAULT current_date,
+    updated_at    timestamptz NOT NULL DEFAULT now()
+  );
 `;
 
 // The database itself (PGDATABASE) must already exist; only the tables are managed here.

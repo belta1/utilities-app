@@ -322,6 +322,24 @@ JSON over HTTP, no authentication. All dates are `YYYY-MM-DD`. Errors return
 | `PATCH` | `/api/sets/:id` | Body: any of `load_kg`, `reps`, `duration_s`, `rir`, `note` (sending `reps` or `duration_s` switches the set to that kind) |
 | `DELETE` | `/api/sets/:id` | |
 
+### Splitter (cuentas de restaurante)
+
+Data written by the [splitter-agent](https://github.com/belta1/splitter-agent) container (tables `splitter_*`, same DDL on both sides); read and managed by `/splitter`.
+
+| Method | Path | Notes |
+|---|---|---|
+| `GET` | `/api/splitter/checks?limit=N` | Latest checks (default 30, max 200), each with `shares: [{ person_name, total, owes, settled_at }]`. |
+| `GET` | `/api/splitter/checks/:id` | One check with the agent's full `result` (items, units and payers, discount, tip, per person). |
+| `DELETE` | `/api/splitter/checks/:id` | Removes the check and its shares. |
+| `PATCH` | `/api/splitter/checks/:id/shares/:person` | Body `{ settled: true|false }` — that person's part is paid back (or not). |
+| `GET` | `/api/splitter/balances` | Unsettled debts grouped by person and payer: `{ person_name, paid_by, owes, checks, detail: [...] }`. |
+| `GET` | `/api/splitter/people` | People with `checks`, unsettled `owes`, `last_check`. |
+| `POST` | `/api/splitter/people` | Body `{ name, email?, aliases? }` (aliases: array or comma list). Idempotent on name. |
+| `PATCH` | `/api/splitter/people/:id` | Body: any of `name`, `email` (`""` clears), `aliases`. |
+| `DELETE` | `/api/splitter/people/:id` | Only when the person has no checks. |
+| `GET` | `/api/splitter/settings` | `{ default_payer, recipients: { to, cc } }`. |
+| `PUT` | `/api/splitter/settings` | Body: any of `default_payer`, `recipients` (emails validated; `to` needs one). |
+
 A set looks like:
 
 ```json
@@ -470,6 +488,8 @@ seed/
 pages/
   recomp_v3.jsx         the dashboard + workout log
   recomp_v2.jsx         the original, unchanged
+  splitter.jsx          restaurant checks split by the splitter-agent: balances, boletas, people, settings
+  _lib/splitter/        tokens.jsx (grafito frio + ambar; PAPER for the boleta)
   _lib/recomp/          tokens.jsx (colors), data.jsx (plan, meals, measurements), ui.jsx (shared tabs)
   hello.jsx, list.jsx   minimal examples of the two page shapes
 scripts/sql.mjs         run SQL with the PG* env vars from a machine without psql

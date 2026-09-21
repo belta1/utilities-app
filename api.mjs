@@ -35,7 +35,8 @@ const asText = (v, name, { required = false, max = 200 } = {}) => {
 };
 
 const EXERCISE_COLS = `
-  e.id, e.slug, e.name, e.muscle_group, e.equipment, e.is_favorite, e.sort_order, e.image_key`;
+  e.id, e.slug, e.name, e.muscle_group, e.equipment, e.is_favorite, e.sort_order, e.image_key,
+  e.load_start, e.load_target, e.load_note, e.muscles, e.steps, e.common_error`;
 
 const SET_COLS = `
   s.id, s.exercise_id, e.name AS exercise_name, e.image_key,
@@ -158,6 +159,244 @@ async function sessions(exerciseId, before, limit) {
   return out;
 }
 
+// ── exercise reference material ───────────────────────────────────
+
+const asTextArray = (v, name, { max = 12 } = {}) => {
+  if (v == null || (Array.isArray(v) && !v.length)) return null;
+  if (!Array.isArray(v) || v.length > max) throw bad(`${name} must be an array of at most ${max} strings`);
+  return v.map((x, i) => asText(x, `${name}[${i}]`, { required: true, max: 300 }));
+};
+
+// The load ladder, the figure and the execution detail live on the exercise, not on the
+// plan slot, so swapping an exercise into a slot carries them along. Only the keys
+// present in the body are touched; pass null to clear one.
+const EXERCISE_PATCH = {
+  name: (v) => asText(v, "name", { required: true }),
+  muscle_group: (v) => asText(v, "muscle_group"),
+  equipment: (v) => asText(v, "equipment"),
+  image_key: (v) => asText(v, "image_key", { max: 60 }),
+  load_start: (v) => asText(v, "load_start", { max: 60 }),
+  load_target: (v) => asText(v, "load_target", { max: 60 }),
+  load_note: (v) => asText(v, "load_note", { max: 300 }),
+  muscles: (v) => asText(v, "muscles", { max: 200 }),
+  steps: (v) => asTextArray(v, "steps"),
+  common_error: (v) => asText(v, "common_error", { max: 300 }),
+};
+
+async function updateExercise(id, body) {
+  const fields = [];
+  const params = [id];
+  for (const [key, parse] of Object.entries(EXERCISE_PATCH)) {
+    if (!(key in body)) continue;
+    params.push(parse(body[key]));
+    fields.push(`${key} = $${params.length}`);
+  }
+  if (!fields.length) throw bad(`nothing to update; keys: ${Object.keys(EXERCISE_PATCH).join(", ")}`);
+  const { rows } = await query(
+    `WITH upd AS (UPDATE exercises SET ${fields.join(", ")} WHERE id = $1 RETURNING *)
+     SELECT ${EXERCISE_COLS}, i.svg FROM upd e LEFT JOIN exercise_images i ON i.key = e.image_key`,
+    params,
+  );
+  if (!rows.length) throw new ApiError(404, "exercise not found");
+  return rows[0];
+}
+
+// The figures the seed rendered — what image_key may be set to.
+async function listImages() {
+  const { rows } = await query("SELECT key, length(svg) AS bytes FROM exercise_images ORDER BY key");
+  return rows;
+}
+
+// ── the plan: what the training tab renders ───────────────────────
+
+// Each slot carries its exercise's figure, load ladder and detail, so the page needs no
+// second lookup and a swapped exercise shows its own image and numbers immediately.
+const PLAN_SLOT = `json_build_object(
+  'id', p.id, 'section', p.section, 'position', p.position,
+  'exercise_id', p.exercise_id, 'name', p.name,
+  'sets', p.sets, 'reps', p.reps, 'rest', p.rest, 'note', p.note,
+  'slug', e.slug, 'muscle_group', e.muscle_group, 'equipment', e.equipment,
+  'image_key', e.image_key, 'svg', i.svg,
+  'load_start', e.load_start, 'load_target', e.load_target, 'load_note', e.load_note,
+  'muscles', e.muscles, 'steps', e.steps, 'common_error', e.common_error)`;
+
+const PLAN_FROM = `
+  FROM plan_days d
+  LEFT JOIN plan_exercises p ON p.plan_day_id = d.id
+  LEFT JOIN exercises e ON e.id = p.exercise_id
+  LEFT JOIN exercise_images i ON i.key = e.image_key`;
+
+async function listPlan(key) {
+  const { rows } = await query(
+    `SELECT d.id, d.key, d.day, d.label, d.type, d.focus, d.source, d.tip, d.post_key,
+            d.is_optional, d.sort_order,
+            coalesce(json_agg(${PLAN_SLOT} ORDER BY (p.section = 'core'), p.position, p.id)
+                     FILTER (WHERE p.id IS NOT NULL), '[]') AS exercises
+     ${PLAN_FROM}
+     WHERE $1::text IS NULL OR d.key = $1
+     GROUP BY d.id
+     ORDER BY d.sort_order, d.id`,
+    [key],
+  );
+  return rows;
+}
+
+async function getPlanDay(key) {
+  const rows = await listPlan(key);
+  if (!rows.length) throw new ApiError(404, `no plan day "${key}"`);
+  return rows[0];
+}
+
+// One slot, shaped exactly like the ones inside a plan day.
+async function planSlot(id) {
+  const { rows } = await query(
+    `SELECT ${PLAN_SLOT} AS slot, d.key AS day_key
+     FROM plan_exercises p
+     JOIN plan_days d ON d.id = p.plan_day_id
+     LEFT JOIN exercises e ON e.id = p.exercise_id
+     LEFT JOIN exercise_images i ON i.key = e.image_key
+     WHERE p.id = $1`,
+    [id],
+  );
+  if (!rows.length) throw new ApiError(404, "plan exercise not found");
+  return { ...rows[0].slot, day_key: rows[0].day_key };
+}
+
+const PLAN_PATCH = {
+  sets: (v) => asText(v, "sets", { max: 20 }),
+  reps: (v) => asText(v, "reps", { max: 40 }),
+  rest: (v) => asText(v, "rest", { max: 20 }),
+  note: (v) => asText(v, "note", { max: 500 }),
+  position: (v) => asNumber(v, "position", { min: 0, integer: true }),
+  section: (v) => {
+    const t = asText(v, "section", { required: true });
+    if (t !== "main" && t !== "core") throw bad("section must be main or core");
+    return t;
+  },
+};
+
+// Swap the exercise in a slot (`exercise_id`, which also renames the slot to the catalog
+// name unless a `name` is given) and/or rewrite its prescription. This is the whole of
+// "cambiar ejercicio": one call, and the card shows the new figure, load ladder and
+// execution detail on the next request.
+async function updatePlanExercise(id, body) {
+  const fields = [];
+  const params = [id];
+  const set = (col, value) => { params.push(value); fields.push(`${col} = $${params.length}`); };
+  if ("exercise_id" in body) {
+    const exerciseId = optional(body.exercise_id) ? null : asNumber(body.exercise_id, "exercise_id", { min: 1, integer: true });
+    set("exercise_id", exerciseId);
+    if (exerciseId != null && optional(body.name)) {
+      const { rows } = await query("SELECT name FROM exercises WHERE id = $1", [exerciseId]);
+      if (!rows.length) throw bad(`no exercise with id ${exerciseId}`);
+      set("name", rows[0].name);
+    }
+  }
+  if (!optional(body.name)) set("name", asText(body.name, "name", { required: true }));
+  for (const [key, parse] of Object.entries(PLAN_PATCH)) if (key in body) set(key, parse(body[key]));
+  if (!fields.length) throw bad("nothing to update");
+  set("updated_at", new Date());
+  const { rowCount } = await query(`UPDATE plan_exercises SET ${fields.join(", ")} WHERE id = $1`, params);
+  if (!rowCount) throw new ApiError(404, "plan exercise not found");
+  return planSlot(id);
+}
+
+async function createPlanExercise(key, body) {
+  const { rows: [day] } = await query("SELECT id FROM plan_days WHERE key = $1", [key]);
+  if (!day) throw new ApiError(404, `no plan day "${key}"`);
+  const section = "section" in body ? PLAN_PATCH.section(body.section) : "main";
+  const exerciseId = optional(body.exercise_id) ? null : asNumber(body.exercise_id, "exercise_id", { min: 1, integer: true });
+  let name = asText(body.name, "name");
+  if (!name) {
+    if (exerciseId == null) throw bad("pass exercise_id and/or name");
+    const { rows } = await query("SELECT name FROM exercises WHERE id = $1", [exerciseId]);
+    if (!rows.length) throw bad(`no exercise with id ${exerciseId}`);
+    name = rows[0].name;
+  }
+  const { rows: [ins] } = await query(
+    `INSERT INTO plan_exercises (plan_day_id, section, position, exercise_id, name, sets, reps, rest, note)
+     VALUES ($1, $2,
+       coalesce($3, (SELECT coalesce(max(position), 0) + 10 FROM plan_exercises WHERE plan_day_id = $1 AND section = $2)),
+       $4, $5, $6, $7, $8, $9)
+     RETURNING id`,
+    [day.id, section, "position" in body ? PLAN_PATCH.position(body.position) : null, exerciseId, name,
+      asText(body.sets, "sets", { max: 20 }), asText(body.reps, "reps", { max: 40 }),
+      asText(body.rest, "rest", { max: 20 }), asText(body.note, "note", { max: 500 })],
+  );
+  return planSlot(ins.id);
+}
+
+async function deletePlanExercise(id) {
+  const { rowCount } = await query("DELETE FROM plan_exercises WHERE id = $1", [id]);
+  if (!rowCount) throw new ApiError(404, "plan exercise not found");
+  return { deleted: id };
+}
+
+// ── body measurements (Samsung Health) ────────────────────────────
+
+const MEASUREMENT_COLS = `m.id, to_char(m.measured_on, 'YYYY-MM-DD') AS measured_on,
+  m.weight_kg, m.body_fat_pct, m.fat_mass_kg, m.skeletal_muscle_kg, m.bmi, m.bmr_kcal,
+  m.body_water_kg, m.protein_kg, m.minerals_kg, m.visceral_fat_level, m.source, m.note, m.updated_at`;
+
+// Every metric is optional — a Samsung Health screenshot does not always show all of
+// them — but a row must carry at least one, otherwise it is only a date.
+const MEASUREMENT_FIELDS = {
+  weight_kg: { min: 20 },
+  body_fat_pct: { min: 0 },
+  fat_mass_kg: { min: 0 },
+  skeletal_muscle_kg: { min: 0 },
+  bmi: { min: 0 },
+  bmr_kcal: { min: 0, integer: true },
+  body_water_kg: { min: 0 },
+  protein_kg: { min: 0 },
+  minerals_kg: { min: 0 },
+  visceral_fat_level: { min: 0 },
+};
+
+async function listMeasurements(limit) {
+  const { rows } = await query(
+    `SELECT ${MEASUREMENT_COLS} FROM body_measurements m ORDER BY m.measured_on DESC LIMIT $1`,
+    [limit],
+  );
+  return rows.reverse();                          // oldest first — the chart's order
+}
+
+// Upsert on the measurement date, so re-reading the same screenshot corrects the row
+// instead of duplicating it. Only the metrics present in the body are written.
+async function putMeasurement(body) {
+  const date = asDate(body.measured_on ?? body.date, "measured_on");
+  if (!date) throw bad("measured_on is required (YYYY-MM-DD)");
+  const cols = ["measured_on"];
+  const params = [date];
+  for (const [key, opts] of Object.entries(MEASUREMENT_FIELDS)) {
+    if (optional(body[key])) continue;
+    cols.push(key);
+    params.push(asNumber(body[key], key, opts));
+  }
+  if (cols.length === 1) throw bad(`pass at least one metric: ${Object.keys(MEASUREMENT_FIELDS).join(", ")}`);
+  const source = asText(body.source, "source", { max: 40 });
+  if (source) { cols.push("source"); params.push(source); }
+  const note = asText(body.note, "note", { max: 500 });
+  if (note) { cols.push("note"); params.push(note); }
+  const updates = cols.slice(1).map((c) => `${c} = EXCLUDED.${c}`).concat("updated_at = now()");
+  const { rows } = await query(
+    `WITH up AS (
+       INSERT INTO body_measurements (${cols.join(", ")})
+       VALUES (${params.map((_, i) => `$${i + 1}`).join(", ")})
+       ON CONFLICT (measured_on) DO UPDATE SET ${updates.join(", ")}
+       RETURNING *)
+     SELECT ${MEASUREMENT_COLS} FROM up m`,
+    params,
+  );
+  return rows[0];
+}
+
+async function deleteMeasurement(id) {
+  const { rowCount } = await query("DELETE FROM body_measurements WHERE id = $1", [id]);
+  if (!rowCount) throw new ApiError(404, "measurement not found");
+  return { deleted: id };
+}
+
 // ── targets: what to lift next time, per exercise ─────────────────
 
 const TARGET_COLS = `t.exercise_id, e.name AS exercise_name, t.load_kg, t.reps, t.reason, t.set_by,
@@ -230,6 +469,16 @@ const routes = [
   ["POST", /^\/api\/exercises$/, (_m, _q, body) => createExercise(body)],
   ["GET", /^\/api\/exercises\/(\d+)\/last$/, (m, q) => lastSession(Number(m[1]), asDate(q.get("before"), "before"))],
   ["GET", /^\/api\/exercises\/(\d+)\/sessions$/, (m, q) => sessions(Number(m[1]), asDate(q.get("before"), "before"), Math.min(asNumber(q.get("limit") ?? 6, "limit", { min: 1, integer: true }), 50))],
+  ["PATCH", /^\/api\/exercises\/(\d+)$/, (m, _q, body) => updateExercise(Number(m[1]), body)],
+  ["GET", /^\/api\/images$/, () => listImages()],
+  ["GET", /^\/api\/plan$/, () => listPlan(null)],
+  ["GET", /^\/api\/plan\/([a-z]+)$/, (m) => getPlanDay(m[1])],
+  ["POST", /^\/api\/plan\/([a-z]+)\/exercises$/, (m, _q, body) => createPlanExercise(m[1], body)],
+  ["PATCH", /^\/api\/plan\/exercises\/(\d+)$/, (m, _q, body) => updatePlanExercise(Number(m[1]), body)],
+  ["DELETE", /^\/api\/plan\/exercises\/(\d+)$/, (m) => deletePlanExercise(Number(m[1]))],
+  ["GET", /^\/api\/measurements$/, (_m, q) => listMeasurements(Math.min(asNumber(q.get("limit") ?? 24, "limit", { min: 1, integer: true }), 200))],
+  ["PUT", /^\/api\/measurements$/, (_m, _q, body) => putMeasurement(body)],
+  ["DELETE", /^\/api\/measurements\/(\d+)$/, (m) => deleteMeasurement(Number(m[1]))],
   ["GET", /^\/api\/targets$/, () => listTargets()],
   ["PUT", /^\/api\/exercises\/(\d+)\/target$/, (m, _q, body) => putTarget(Number(m[1]), body)],
   ["DELETE", /^\/api\/exercises\/(\d+)\/target$/, (m) => deleteTarget(Number(m[1]))],

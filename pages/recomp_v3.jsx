@@ -1,9 +1,14 @@
-// RECOMP v3 — v2 plus a workout log backed by Postgres (/api/*).
-// Exercise catalog and animated figures come from the DB; the plan, dashboard and
-// nutrition content is shared with v2 through ./_lib/recomp/*.
+// RECOMP v3 — the workout log and the plan, both backed by Postgres (/api/*).
+//
+// Everything with a number or a figure in it comes from the database: the catalog and
+// its animated figures, the plan day and its prescribed sets/reps/rest, the load ladder
+// and execution detail of each exercise, the coach's targets, and the body measurements
+// on the telemetry tab. Swapping an exercise or rebalancing a target is therefore a
+// write to the DB — no deploy, no page edit. Only the written content (weekly menu,
+// macros, supplements, post-workout meals) still lives in ./_lib/recomp/data.jsx.
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { T, J } from "./_lib/recomp/tokens.jsx";
-import { days, weightSuggestions, EXERCISE_DETAIL, POST_WORKOUT } from "./_lib/recomp/data.jsx";
+import { POST_WORKOUT } from "./_lib/recomp/data.jsx";
 import { DashboardTab, NutritionTab } from "./_lib/recomp/ui.jsx";
 
 const MONO = "'JetBrains Mono',monospace";
@@ -50,6 +55,43 @@ function useExercises() {
   const byName = useMemo(() => Object.fromEntries(list.map((e) => [e.name, e])), [list]);
   const byId = useMemo(() => Object.fromEntries(list.map((e) => [e.id, e])), [list]);
   return { list, byName, byId, error, refresh };
+}
+
+// The plan: one entry per day, each with its prescribed slots (main list + core
+// finisher) already joined to the exercise's figure, load ladder and detail. Refetched
+// on demand so a swap made by the coach shows up as soon as the tab is reopened.
+function usePlan() {
+  const [days, setDays] = useState([]);
+  const [error, setError] = useState(null);
+  const refresh = useCallback(() => api("GET", "/api/plan").then((rows) => { setDays(rows); setError(null); }).catch((e) => setError(e.message)), []);
+  useEffect(() => { refresh(); }, [refresh]);
+  return { days, error, refresh };
+}
+
+// Body composition rows, oldest first (the sparkline's order).
+function useMeasurements() {
+  const [rows, setRows] = useState([]);
+  const [error, setError] = useState(null);
+  useEffect(() => {
+    let live = true;
+    api("GET", "/api/measurements?limit=24").then((r) => live && setRows(r)).catch((e) => live && setError(e.message));
+    return () => { live = false; };
+  }, []);
+  return { rows, error };
+}
+
+// Distinct training days in the last 7 — the "sesiones/semana" goal on the dashboard.
+function useSessionsPerWeek(today) {
+  const [n, setN] = useState(null);
+  useEffect(() => {
+    if (!today) return;
+    let live = true;
+    api("GET", `/api/sets?from=${shiftDate(today, -6)}&to=${today}`)
+      .then((sets) => live && setN(new Set(sets.map((s) => s.performed_on)).size))
+      .catch(() => {});
+    return () => { live = false; };
+  }, [today]);
+  return n;
 }
 
 // Sets logged on one date, plus mutations that refetch afterwards.
@@ -224,15 +266,26 @@ const SetLogger = ({ exercise, accent, sets, log, date, timed = false }) => {
 // ═══════════════════════════════════════════════════════════════
 const dayAccent = (type) => type === "strength" ? T.copper : type === "lesmills" ? T.steel : type === "recovery" ? T.sage : type === "core" ? T.gold : T.faint;
 
-const TrainingTab = ({ exercises, today }) => {
+// A plan slot is the row the card renders. It carries its exercise's figure, load
+// ladder and execution detail, so a card needs nothing else; `exercise_id` is null only
+// for the Les Mills / cycling placeholders, which are shown but never logged.
+const isTimed = (slot) => /seg/i.test(slot.reps ?? "");
+
+const TrainingTab = ({ plan, today }) => {
   const [activeDay, setActiveDay] = useState(0);
   const [expandedEx, setExpandedEx] = useState(null);
   const log = useSets(today);
   const targets = useTargets(log.sets);
   const typeLabel = { strength: "FUERZA", lesmills: "CARDIO", recovery: "BALANCE", core: "CORE", rest: "OFF" };
+  const days = plan.days;
   const sel = days[activeDay];
-  const accent = dayAccent(sel.type);
-  const setsFor = (name) => log.sets.filter((s) => s.exercise_name === name);
+  const accent = dayAccent(sel?.type);
+  const setsFor = (slot) => (slot.exercise_id ? log.sets.filter((s) => s.exercise_id === slot.exercise_id) : []);
+  const main = sel ? sel.exercises.filter((x) => x.section !== "core") : [];
+  const core = sel ? sel.exercises.filter((x) => x.section === "core") : [];
+
+  if (plan.error) return <div style={{ padding: "26px 16px", fontSize: 11, color: "#D98A8A" }}>No se pudo cargar el plan: {plan.error}</div>;
+  if (!sel) return <div style={{ padding: "26px 16px", fontSize: 10, color: T.faint, fontFamily: MONO, letterSpacing: 2 }}>// CARGANDO PLAN…</div>;
 
   return (
     <div>
@@ -251,7 +304,7 @@ const TrainingTab = ({ exercises, today }) => {
             const ac = dayAccent(d.type);
             const on = activeDay === i;
             return (
-              <button key={i} onClick={() => { setActiveDay(i); setExpandedEx(null); }} style={{
+              <button key={d.id} onClick={() => { setActiveDay(i); setExpandedEx(null); }} style={{
                 flexShrink: 0, padding: "8px 11px", borderRadius: 10, minWidth: 56, textAlign: "center", cursor: "pointer",
                 background: on ? T.raised : T.surface, border: `1px solid ${on ? ac : T.line}`, borderTop: `2px solid ${on ? ac : T.line}`,
                 color: on ? T.bone : T.ash, transition: "all .2s",
@@ -270,7 +323,7 @@ const TrainingTab = ({ exercises, today }) => {
           <div style={{ fontFamily: GROT, fontSize: 16, fontWeight: 700, color: T.bone, lineHeight: 1.2 }}>{sel.label}</div>
           <div style={{ display: "flex", justifyContent: "space-between", marginTop: 5, alignItems: "center" }}>
             <div style={{ fontSize: 10, color: T.ash }}>{sel.focus}</div>
-            {sel.optional
+            {sel.is_optional
               ? <div style={{ fontSize: 8, color: T.gold, border: `1px solid ${T.gold}55`, borderRadius: 6, padding: "2px 7px", fontFamily: MONO }}>OPCIONAL</div>
               : sel.source && <div style={{ fontSize: 8, color: T.faint, fontFamily: MONO }}>{sel.source}</div>}
           </div>
@@ -288,18 +341,17 @@ const TrainingTab = ({ exercises, today }) => {
             {sel.type === "strength" && <div style={{ fontSize: 9, color: T.faint, marginBottom: 8, fontFamily: MONO }}>tap ejercicio → registrar series · pesos sugeridos</div>}
 
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {sel.exercises.map((ex, i) => {
-                const isExp = expandedEx === i;
-                const w = weightSuggestions[ex.name];
-                const dbEx = exercises.byName[ex.name];
-                const done = setsFor(ex.name);
+              {main.map((ex) => {
+                const isExp = expandedEx === ex.id;
+                const done = setsFor(ex);
                 const target = Number(ex.sets) || 0;
+                const coachTarget = ex.exercise_id ? targets[ex.exercise_id] : null;
                 return (
-                  <div key={i} onClick={() => setExpandedEx(isExp ? null : i)}
+                  <div key={ex.id} onClick={() => setExpandedEx(isExp ? null : ex.id)}
                     style={{ background: isExp ? T.raised : T.surface, border: `1px solid ${isExp ? accent + "66" : done.length ? accent + "33" : T.line}`, borderRadius: 12, padding: "11px 12px", cursor: "pointer", transition: "all .2s" }}>
                     <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
                       <div style={{ flexShrink: 0, width: 86, height: 68, background: T.bg, borderRadius: 9, border: `1px solid ${accent}26`, padding: 3, overflow: "hidden" }}>
-                        <ExerciseImage exercise={dbEx} accent={accent} />
+                        <ExerciseImage exercise={ex} accent={accent} />
                       </div>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontSize: 12, fontWeight: 600, lineHeight: 1.35, color: T.bone, marginBottom: ex.note ? 3 : 0, fontFamily: GROT }}>{ex.name}</div>
@@ -318,7 +370,7 @@ const TrainingTab = ({ exercises, today }) => {
                     </div>
                     {ex.sets !== "—" && (
                       <div style={{ display: "flex", gap: 5, marginTop: 9 }}>
-                        {[["SER", ex.sets, accent], ["REPS", ex.reps, T.bone], ["PAUSA", ex.rest, T.ash]].map(([lbl, val, col], j) => (
+                        {[["SER", ex.sets, accent], [isTimed(ex) ? "TIEMPO" : "REPS", ex.reps, T.bone], ["PAUSA", ex.rest, T.ash]].map(([lbl, val, col], j) => (
                           <div key={j} style={{ background: T.bg, borderRadius: 7, padding: "5px 8px", flex: 1, textAlign: "center", border: `1px solid ${T.line}` }}>
                             <div style={{ fontSize: 7, color: T.faint, letterSpacing: 1.5, fontFamily: MONO }}>{lbl}</div>
                             <div style={{ fontSize: 12, fontFamily: GROT, fontWeight: 700, color: col }}>{val}</div>
@@ -326,40 +378,46 @@ const TrainingTab = ({ exercises, today }) => {
                         ))}
                       </div>
                     )}
-                    {dbEx && targets[dbEx.id] && <TargetLine target={targets[dbEx.id]} accent={accent} />}
+                    {coachTarget && <TargetLine target={coachTarget} accent={accent} />}
                     {isExp && (
                       <div style={{ marginTop: 9, display: "flex", flexDirection: "column", gap: 8 }}>
-                        {dbEx && today && <SetLogger exercise={dbEx} accent={accent} sets={done} log={log} date={today} timed={/seg/i.test(ex.reps)} />}
-                        {w && (
+                        {ex.exercise_id && today && <SetLogger exercise={{ id: ex.exercise_id, name: ex.name }} accent={accent} sets={done} log={log} date={today} timed={isTimed(ex)} />}
+                        {(ex.load_start || ex.load_target) && (
                           <div style={{ background: T.bg, border: `1px solid ${accent}33`, borderRadius: 9, padding: "10px 12px" }}>
                             <Label style={{ marginBottom: 7 }}>// CARGA</Label>
-                            <div style={{ display: "flex", gap: 7, marginBottom: 7 }}>
+                            <div style={{ display: "flex", gap: 7, marginBottom: ex.load_note ? 7 : 0 }}>
                               <div style={{ flex: 1, background: T.surface, borderRadius: 7, padding: "6px 9px" }}>
                                 <Label style={{ marginBottom: 2, letterSpacing: 0 }}>INICIO</Label>
-                                <div style={{ fontSize: 12, fontFamily: GROT, fontWeight: 700, color: accent }}>{w.start}</div>
+                                <div style={{ fontSize: 12, fontFamily: GROT, fontWeight: 700, color: accent }}>{ex.load_start ?? "—"}</div>
                               </div>
                               <div style={{ flex: 1, background: T.surface, borderRadius: 7, padding: "6px 9px" }}>
                                 <Label style={{ marginBottom: 2, letterSpacing: 0 }}>SEM_06</Label>
-                                <div style={{ fontSize: 12, fontFamily: GROT, fontWeight: 700, color: T.bone }}>{w.target}</div>
+                                <div style={{ fontSize: 12, fontFamily: GROT, fontWeight: 700, color: T.bone }}>{ex.load_target ?? "—"}</div>
                               </div>
                             </div>
-                            <div style={{ fontSize: 10, color: T.sage, lineHeight: 1.5 }}>{w.note}</div>
+                            {ex.load_note && <div style={{ fontSize: 10, color: T.sage, lineHeight: 1.5 }}>{ex.load_note}</div>}
                           </div>
                         )}
-                        {EXERCISE_DETAIL[ex.name] && (
+                        {(ex.muscles || ex.steps?.length) && (
                           <div style={{ background: T.bg, border: `1px solid ${T.line}`, borderRadius: 9, padding: "10px 12px" }}>
-                            <Label style={{ marginBottom: 4 }}>// MUSCULOS</Label>
-                            <div style={{ fontSize: 10, color: T.gold, marginBottom: 9 }}>{EXERCISE_DETAIL[ex.name].musculos}</div>
-                            <Label style={{ marginBottom: 5 }}>// EJECUCION</Label>
-                            {EXERCISE_DETAIL[ex.name].pasos.map((p, pi) => (
-                              <div key={pi} style={{ display: "flex", gap: 8, marginBottom: 5 }}>
-                                <div style={{ flexShrink: 0, width: 16, height: 16, borderRadius: 4, background: accent + "22", border: `1px solid ${accent}44`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 8, color: accent, fontFamily: MONO }}>{pi + 1}</div>
-                                <div style={{ fontSize: 10, color: T.bone, lineHeight: 1.5, paddingTop: 1 }}>{p}</div>
+                            {ex.muscles && <>
+                              <Label style={{ marginBottom: 4 }}>// MUSCULOS</Label>
+                              <div style={{ fontSize: 10, color: T.gold, marginBottom: 9 }}>{ex.muscles}</div>
+                            </>}
+                            {ex.steps?.length > 0 && <>
+                              <Label style={{ marginBottom: 5 }}>// EJECUCION</Label>
+                              {ex.steps.map((step, pi) => (
+                                <div key={pi} style={{ display: "flex", gap: 8, marginBottom: 5 }}>
+                                  <div style={{ flexShrink: 0, width: 16, height: 16, borderRadius: 4, background: accent + "22", border: `1px solid ${accent}44`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 8, color: accent, fontFamily: MONO }}>{pi + 1}</div>
+                                  <div style={{ fontSize: 10, color: T.bone, lineHeight: 1.5, paddingTop: 1 }}>{step}</div>
+                                </div>
+                              ))}
+                            </>}
+                            {ex.common_error && (
+                              <div style={{ marginTop: 8, fontSize: 10, color: "#D98A8A", background: "#241414", border: "1px solid #4A2828", borderRadius: 7, padding: "6px 9px", lineHeight: 1.5 }}>
+                                ✕ {ex.common_error}
                               </div>
-                            ))}
-                            <div style={{ marginTop: 8, fontSize: 10, color: "#D98A8A", background: "#241414", border: "1px solid #4A2828", borderRadius: 7, padding: "6px 9px", lineHeight: 1.5 }}>
-                              ✕ {EXERCISE_DETAIL[ex.name].error}
-                            </div>
+                            )}
                           </div>
                         )}
                       </div>
@@ -369,18 +427,17 @@ const TrainingTab = ({ exercises, today }) => {
               })}
             </div>
 
-            {sel.core && (
+            {core.length > 0 && (
               <div style={{ marginTop: 12 }}>
                 <Label color={T.gold} style={{ fontSize: 9, marginBottom: 8 }}>// CORE_FINISHER — 5-8 MIN</Label>
                 <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-                  {sel.core.map((ex, ci) => {
-                    const key = `core-${ci}`;                       // own key space, separate from the main list
-                    const isExp = expandedEx === key;
-                    const dbEx = exercises.byName[ex.name];
-                    const done = setsFor(ex.name);
+                  {core.map((ex) => {
+                    const isExp = expandedEx === ex.id;
+                    const done = setsFor(ex);
                     const target = Number(ex.sets) || 0;
+                    const coachTarget = ex.exercise_id ? targets[ex.exercise_id] : null;
                     return (
-                      <div key={ci} onClick={() => setExpandedEx(isExp ? null : key)}
+                      <div key={ex.id} onClick={() => setExpandedEx(isExp ? null : ex.id)}
                         style={{ background: isExp ? T.raised : T.surface, border: `1px solid ${isExp ? T.gold + "66" : done.length ? T.gold + "44" : T.gold + "22"}`, borderRadius: 11, padding: "10px 13px", cursor: "pointer", transition: "all .2s" }}>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
                           <div style={{ fontSize: 12, fontWeight: 600, color: T.gold, marginBottom: 3, fontFamily: GROT }}>{ex.name}</div>
@@ -395,17 +452,17 @@ const TrainingTab = ({ exercises, today }) => {
                         </div>
                         <div style={{ fontSize: 10, color: T.ash, lineHeight: 1.5, marginBottom: 8 }}>{ex.note}</div>
                         <div style={{ display: "flex", gap: 5 }}>
-                          {[["SER", ex.sets, T.gold], [/seg/i.test(ex.reps) ? "TIEMPO" : "REPS", ex.reps, T.bone], ["PAUSA", ex.rest, T.ash]].map(([lbl, val, col], j) => (
+                          {[["SER", ex.sets, T.gold], [isTimed(ex) ? "TIEMPO" : "REPS", ex.reps, T.bone], ["PAUSA", ex.rest, T.ash]].map(([lbl, val, col], j) => (
                             <div key={j} style={{ background: T.bg, borderRadius: 7, padding: "5px 8px", flex: 1, textAlign: "center", border: `1px solid ${T.line}` }}>
                               <div style={{ fontSize: 7, color: T.faint, letterSpacing: 1.5, fontFamily: MONO }}>{lbl}</div>
                               <div style={{ fontSize: 11, fontFamily: GROT, fontWeight: 700, color: col }}>{val}</div>
                             </div>
                           ))}
                         </div>
-                        {dbEx && targets[dbEx.id] && <TargetLine target={targets[dbEx.id]} accent={T.gold} />}
-                        {isExp && dbEx && today && (
+                        {coachTarget && <TargetLine target={coachTarget} accent={T.gold} />}
+                        {isExp && ex.exercise_id && today && (
                           <div style={{ marginTop: 9 }}>
-                            <SetLogger exercise={dbEx} accent={T.gold} sets={done} log={log} date={today} timed={/seg/i.test(ex.reps)} />
+                            <SetLogger exercise={{ id: ex.exercise_id, name: ex.name }} accent={T.gold} sets={done} log={log} date={today} timed={isTimed(ex)} />
                           </div>
                         )}
                       </div>
@@ -415,17 +472,17 @@ const TrainingTab = ({ exercises, today }) => {
               </div>
             )}
 
-            {sel.postKey && POST_WORKOUT[sel.postKey] && (
+            {sel.post_key && POST_WORKOUT[sel.post_key] && (
               <div style={{ marginTop: 12, background: "#16201A", border: `1px solid ${T.sage}33`, borderRadius: 12, padding: "13px 15px" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
-                  <Label color={T.sage} style={{ fontSize: 9 }}>// {POST_WORKOUT[sel.postKey].titulo.toUpperCase()}</Label>
-                  <div style={{ fontSize: 8, color: T.gold, fontFamily: MONO }}>{POST_WORKOUT[sel.postKey].ventana}</div>
+                  <Label color={T.sage} style={{ fontSize: 9 }}>// {POST_WORKOUT[sel.post_key].titulo.toUpperCase()}</Label>
+                  <div style={{ fontSize: 8, color: T.gold, fontFamily: MONO }}>{POST_WORKOUT[sel.post_key].ventana}</div>
                 </div>
-                {POST_WORKOUT[sel.postKey].comida.map((c, ci) => (
+                {POST_WORKOUT[sel.post_key].comida.map((c, ci) => (
                   <div key={ci} style={{ fontSize: 11, color: T.bone, lineHeight: 1.9, paddingLeft: 9, borderLeft: `1px solid ${T.sage}55` }}>· {c}</div>
                 ))}
-                <div style={{ marginTop: 8, fontSize: 9, color: T.sage, fontFamily: MONO }}>{POST_WORKOUT[sel.postKey].macros}</div>
-                <div style={{ marginTop: 6, fontSize: 10, color: T.ash, lineHeight: 1.6 }}>{POST_WORKOUT[sel.postKey].razon}</div>
+                <div style={{ marginTop: 8, fontSize: 9, color: T.sage, fontFamily: MONO }}>{POST_WORKOUT[sel.post_key].macros}</div>
+                <div style={{ marginTop: 6, fontSize: 10, color: T.ash, lineHeight: 1.6 }}>{POST_WORKOUT[sel.post_key].razon}</div>
               </div>
             )}
             {sel.type === "strength" && (
@@ -443,6 +500,7 @@ const TrainingTab = ({ exercises, today }) => {
 };
 
 // ═══════════════════════════════════════════════════════════════
+// LOG TAB — any exercise, any date, history// ═══════════════════════════════════════════════════════════════
 // LOG TAB — any exercise, any date, history
 // ═══════════════════════════════════════════════════════════════
 const NewExerciseForm = ({ initialName = "", onCreated, onCancel }) => {
@@ -485,7 +543,7 @@ const PATTERN_OF_GROUP = {
 const dayPattern = (d) => (d.type === "core" ? "core" : /Pierna/.test(d.label) ? "legs" : /Halar/.test(d.label) && !/Empuje/.test(d.label) ? "pull" : /Empuje/.test(d.label) && !/Halar/.test(d.label) ? "push" : null);
 const guessPattern = (e) => (/face pull|pajaros|remo|encogimiento/i.test(e.name) ? "pull" : PATTERN_OF_GROUP[e.muscle_group] ?? "other");
 
-function pickerGroups(exercises) {
+function pickerGroups(exercises, planDays) {
   const buckets = Object.fromEntries(PATTERNS.map(([key]) => [key, []]));
   const seen = new Set();
   const put = (e, pattern, plan) => {
@@ -493,10 +551,12 @@ function pickerGroups(exercises) {
     seen.add(e.id);
     buckets[pattern].push({ value: String(e.id), exercise: e, plan });
   };
-  for (const d of days) {
+  for (const d of planDays) {
     const p = dayPattern(d);
-    if (p) for (const x of d.exercises) put(exercises.byName[x.name], p, true);
-    for (const x of d.core ?? []) put(exercises.byName[x.name], "core", true);
+    for (const x of d.exercises) {
+      const bucket = x.section === "core" ? "core" : p;
+      if (bucket) put(exercises.byId[x.exercise_id], bucket, true);
+    }
   }
   for (const e of exercises.list) put(e, guessPattern(e), false);
   return PATTERNS.map(([key, label, hint]) => ({ label, hint, items: buckets[key] })).filter((g) => g.items.length);
@@ -584,7 +644,7 @@ const ExercisePicker = ({ groups, value, onPick, onCreate, accent }) => {
   );
 };
 
-const LogTab = ({ exercises, today }) => {
+const LogTab = ({ exercises, plan, today }) => {
   const [date, setDate] = useState(today);
   const [exerciseId, setExerciseId] = useState("");
   const [creating, setCreating] = useState(false);
@@ -615,7 +675,7 @@ const LogTab = ({ exercises, today }) => {
     return [...m.entries()].map(([d, sets]) => ({ date: d, sets, exercises: new Set(sets.map((s) => s.exercise_id)).size }));
   }, [history]);
 
-  const picker = useMemo(() => pickerGroups(exercises), [exercises.list]);
+  const picker = useMemo(() => pickerGroups(exercises, plan.days), [exercises.list, plan.days]);
 
   if (!date) return <div style={{ padding: 24, textAlign: "center", color: T.faint, fontFamily: MONO, fontSize: 10 }}>cargando…</div>;
 
@@ -725,6 +785,10 @@ export default function PlanRecomp() {
   const [tab, setTab] = useState("dash");
   const [today, setToday] = useState(null);
   const exercises = useExercises();
+  const plan = usePlan();
+  const measurements = useMeasurements();
+  const sessionsPerWeek = useSessionsPerWeek(today);
+  const latest = measurements.rows[measurements.rows.length - 1] ?? null;
   useEffect(() => { setToday(localDate()); }, []);
 
   return (
@@ -755,8 +819,13 @@ export default function PlanRecomp() {
             </div>
           </div>
           <div style={{ textAlign: "right", fontSize: 9, color: T.ash, lineHeight: 1.6 }}>
-            <div><span style={{ color: T.gold }}>77.8</span> kg · <span style={{ color: T.copper }}>21.6</span>%</div>
-            <div style={{ color: T.faint }}>obj: 15% en 12 sem</div>
+            <div>
+              {latest?.weight_kg != null && <><span style={{ color: T.gold }}>{Number(latest.weight_kg).toFixed(1)}</span> kg</>}
+              {latest?.weight_kg != null && latest?.body_fat_pct != null && " · "}
+              {latest?.body_fat_pct != null && <><span style={{ color: T.copper }}>{Number(latest.body_fat_pct).toFixed(1)}</span>%</>}
+              {!latest && <span style={{ color: T.faint }}>sin medicion</span>}
+            </div>
+            <div style={{ color: T.faint }}>obj: 16% en 12 sem</div>
           </div>
         </div>
         <div style={{ display: "flex" }}>
@@ -772,14 +841,14 @@ export default function PlanRecomp() {
       </div>
 
       <div key={tab}>
-        {tab === "dash" ? <DashboardTab />
-          : tab === "entreno" ? <TrainingTab exercises={exercises} today={today} />
-          : tab === "registro" ? <LogTab exercises={exercises} today={today} />
+        {tab === "dash" ? <DashboardTab measurements={measurements.rows} sessionsPerWeek={sessionsPerWeek} error={measurements.error} />
+          : tab === "entreno" ? <TrainingTab plan={plan} today={today} />
+          : tab === "registro" ? <LogTab exercises={exercises} plan={plan} today={today} />
           : <NutritionTab />}
       </div>
 
       <div style={{ padding: "10px 18px 26px", textAlign: "center", fontSize: 8, color: T.faint, letterSpacing: 2 }}>
-        DATA 27/08 · RECOMPOSICION CONFIRMADA · REV EN 3 SEMANAS
+        {latest ? `DATA ${latest.measured_on.slice(8)}/${latest.measured_on.slice(5, 7)} · PLAN Y MEDICIONES DESDE LA BASE DE DATOS` : "SIN MEDICIONES REGISTRADAS"}
       </div>
     </div>
   );

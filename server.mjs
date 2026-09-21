@@ -160,7 +160,7 @@ const server = createServer(async (req, res) => {
 
 await migrate();
 const seeded = await seed();
-console.log(`db ready: ${seeded.images} images, ${seeded.exercisesInserted} new exercises`);
+console.log(`db ready: ${seeded.images} images, ${seeded.exercisesInserted} new exercises${seeded.planDays ? `, plan seeded (${seeded.planDays} days)` : ""}`);
 
 // Outlive any browser or proxy idle timeout, so a request is never written into a
 // socket we are closing at that same moment (the browser reports that as a bare

@@ -5,6 +5,8 @@
       "Bash(sql:*)",
       "Bash(hoy:*)",
       "Bash(semana:*)",
+      "Bash(plan:*)",
+      "Bash(medir:*)",
       "Bash(importar:*)",
       "Bash(date:*)",
       "Bash(cat:*)",

@@ -276,15 +276,22 @@ Put global CSS in a `<style>` element inside the page (see `recomp_v3.jsx`).
 
 ## 5. The RECOMP dashboard (recomp_v3)
 
-`pages/recomp_v3.jsx` is the training dashboard plus workout log. It shares the plan,
-measurements, nutrition data and the TELEMETRIA / NUTRICION tabs with the original
-`recomp_v2.jsx` through `pages/_lib/recomp/` (`tokens.jsx`, `data.jsx`, `ui.jsx`).
-`recomp_v2.jsx` is kept unchanged.
+`pages/recomp_v3.jsx` is the training dashboard plus workout log.
+
+**Everything with a number or a figure in it comes from the database** — the exercise
+catalog and its figures, the plan day and its prescribed sets/reps/rest, each exercise's
+load ladder and execution detail, the coach's targets, and the body measurements. The
+page fetches `/api/plan`, `/api/measurements`, `/api/exercises`, `/api/sets` and
+`/api/targets` after mount and renders what comes back. Swapping an exercise or
+rebalancing a target is therefore a write to the DB: no page edit, no deploy. Only the
+written content — weekly menu, macros, supplements, post-workout meals — still lives in
+`pages/_lib/recomp/data.jsx`, shared with the older `recomp_v2.jsx` (kept unchanged, and
+still rendering its own hard-coded copy of the plan).
 
 | Tab | What it does |
 |---|---|
-| **TELEMETRIA** | Body measurements, weight trend, goals (unchanged from v2) |
-| **ENTRENO** | The weekly plan. Tap an exercise card to open it: log `kg × reps` right there, see the sets done today as chips, "ultima vez" shows the previous session's sets, and the badge shows sets done vs planned (`2/4`). Suggested loads and execution steps are below the logger. |
+| **TELEMETRIA** | Body composition from `body_measurements`: weight sparkline, a card per metric with its change since the previous measurement, and the 12-week goal bars. Empty until the first measurement is written (see the `medicion` coach skill). |
+| **ENTRENO** | The weekly plan, from `plan_days` / `plan_exercises`. Tap an exercise card to open it: log `kg × reps` right there, see the sets done today as chips, "ultima vez" shows the previous session's sets, and the badge shows sets done vs planned (`2/4`). The load ladder and execution steps below the logger belong to the exercise, so a swap brings its own. |
 | **REGISTRO** | Free-form log for any date. Type to search (accents ignored, any word order) or pick from the list — grouped by movement pattern (**EMPUJE**, **HALAR**, **PIERNA**, **CORE**; plan exercises first, marked ●), or **+ nuevo ejercicio**, add sets, delete with ✕. Shows sets / exercises / volume for the day, sets grouped by exercise, and a 60-day history — tap a day to jump to it. |
 | **NUTRICION** | Weekly meal plan and supplements (unchanged from v2) |
 
@@ -296,6 +303,8 @@ Details worth knowing:
 - Dates are the browser's local date. Sets are stored by calendar day, not timestamp.
 - Every exercise figure comes from the database (`exercise_images`), tinted with the
   day-type color through CSS `color` + `currentColor`.
+- A plan slot with no catalog exercise (the Les Mills / cycling placeholders) is shown
+  but cannot be logged — it has no `exercise_id`.
 
 ---
 
@@ -312,6 +321,8 @@ JSON over HTTP, no authentication. All dates are `YYYY-MM-DD`. Errors return
 | `POST` | `/api/exercises` | Body `{ name, muscle_group?, equipment?, image_key? }`. Idempotent on name (slug). |
 | `GET` | `/api/exercises/:id/last?before=DATE` | Sets from the most recent session strictly before `before` (or the latest overall if omitted). `null` if none. |
 | `GET` | `/api/exercises/:id/sessions?before=DATE&limit=N` | The last N sessions (default 6, max 50) strictly before `before`, newest first, each `{ performed_on, sets: […] }`. What the coach's progression model reads. |
+| `PATCH` | `/api/exercises/:id` | Body: any of `name`, `muscle_group`, `equipment`, `image_key`, `load_start`, `load_target`, `load_note`, `muscles`, `steps` (array), `common_error`. The reference material the training card shows. |
+| `GET` | `/api/images` | The figure keys `image_key` may point at. |
 
 ### Sets
 
@@ -353,6 +364,31 @@ What to lift next time, one row per exercise, shown on the training tab's cards 
 | `PUT` | `/api/exercises/:id/target` | Body `{ load_kg?, reps?, reason?, set_by?, set_on? }` (at least one of `load_kg` / `reps`). Upserts. |
 | `DELETE` | `/api/exercises/:id/target` | |
 
+### Plan
+
+The weekly plan the ENTRENO tab renders. `:day` is the day key — `lunes`, `martes`,
+`miercoles`, `jueves`, `viernes`, `sabado`, `core`, `domingo`. A slot carries its
+exercise's figure, load ladder and execution detail, so swapping `exercise_id` is all it
+takes to change what the card shows.
+
+| Method | Path | Notes |
+|---|---|---|
+| `GET` | `/api/plan` | Every day with its slots, in plan order (main list first, then the core finisher). |
+| `GET` | `/api/plan/:day` | One day. |
+| `POST` | `/api/plan/:day/exercises` | Body `{ exercise_id?, name?, section?, position?, sets?, reps?, rest?, note? }`. `section` is `main` (default) or `core`; pass `exercise_id` and/or `name`. |
+| `PATCH` | `/api/plan/exercises/:slotId` | Same keys. Passing `exercise_id` also renames the slot to the catalog name unless `name` is given — this is the swap. |
+| `DELETE` | `/api/plan/exercises/:slotId` | |
+
+### Measurements
+
+Body composition, one row per measurement date, written from Samsung Health screenshots.
+
+| Method | Path | Notes |
+|---|---|---|
+| `GET` | `/api/measurements?limit=N` | The last N (default 24, max 200), **oldest first** — the chart's order. |
+| `PUT` | `/api/measurements` | Body `{ measured_on, weight_kg?, body_fat_pct?, fat_mass_kg?, skeletal_muscle_kg?, bmi?, bmr_kcal?, body_water_kg?, protein_kg?, minerals_kg?, visceral_fat_level?, source?, note? }`. Upserts on `measured_on`; at least one metric required. |
+| `DELETE` | `/api/measurements/:id` | |
+
 ### Other routes
 
 | Method | Path | Notes |
@@ -373,14 +409,29 @@ exercise_images   key ─────────────┐   plain SVG per
                   svg, updated_at  │
                                    │
 exercises         id, slug (unique), name, muscle_group, equipment,
-                  is_favorite, sort_order, image_key ──┘, created_at
-                    │
-workout_sets      id, exercise_id ──┘, performed_on (date), set_number,
-                  load_kg numeric(6,2) ≥ 0, reps int > 0 | duration_s int > 0 (one of the two),
-                  rir smallint 0–5 (reps in reserve, optional), note, logged_at
-                    │
-exercise_targets  exercise_id ──┘ (PK), load_kg, reps text, reason, set_by, set_on, updated_at
-                  indexes: (performed_on), (exercise_id, performed_on)
+                  is_favorite, sort_order, image_key ──┘, created_at,
+                  load_start, load_target, load_note,     the card's CARGA block
+                  muscles, steps text[], common_error     the card's MUSCULOS / EJECUCION
+                    │ │
+                    │ └── workout_sets    id, exercise_id, performed_on (date), set_number,
+                    │                     load_kg numeric(6,2) ≥ 0,
+                    │                     reps int > 0 | duration_s int > 0 (one of the two),
+                    │                     rir smallint 0–5 (reps in reserve, optional),
+                    │                     note, logged_at
+                    │                     indexes: (performed_on), (exercise_id, performed_on)
+                    ├── exercise_targets  exercise_id (PK), load_kg, reps text, reason,
+                    │                     set_by, set_on, updated_at
+                    └── plan_exercises    id, plan_day_id ─┐, section 'main'|'core', position,
+                                          exercise_id (null = a cardio placeholder),
+                                          name, sets, reps, rest, note, updated_at
+                                                          │
+plan_days         id ─────────────────────────────────────┘
+                  key (unique: lunes…domingo, core), day, label, type, focus, source,
+                  tip, post_key, is_optional, sort_order
+
+body_measurements id, measured_on (date, unique), weight_kg, body_fat_pct, fat_mass_kg,
+                  skeletal_muscle_kg, bmi, bmr_kcal, body_water_kg, protein_kg,
+                  minerals_kg, visceral_fat_level, source, note, updated_at
 ```
 
 **Seeding** runs after migration on every start and is safe to repeat:
@@ -388,9 +439,16 @@ exercise_targets  exercise_id ──┘ (PK), load_kg, reps text, reason, set_by
 - `exercise_images` — upserted from the figure sources, so a changed figure ships with the
   next deploy.
 - `exercises` — inserted if the slug is new. Existing rows keep their `name`,
-  `muscle_group`, `equipment`, `is_favorite` and `sort_order` (edit them freely in the DB);
-  only `image_key` is refreshed by the seed.
-- `workout_sets` — never touched.
+  `muscle_group`, `equipment`, `is_favorite` and `sort_order` (edit them freely in the DB).
+  `image_key` is refreshed by the seed, and so is the reference material from
+  `seed/exercise-meta.mjs` (`load_start`, `load_target`, `load_note`, `muscles`, `steps`,
+  `common_error`) — but only where the seed has a value, so anything the coach filled in
+  through `PATCH /api/exercises/:id` for an exercise the seed says nothing about survives.
+- `plan_days` / `plan_exercises` — **bootstrap only**. `seed/plan.mjs` fills them the first
+  time they are empty and never again; after that the database is the source of truth and
+  the coach edits it through `/api/plan`, so a deploy cannot undo a swap. To start the plan
+  over: `DELETE FROM plan_days;` and restart.
+- `workout_sets` and `body_measurements` — never touched.
 
 Useful queries:
 
@@ -407,6 +465,15 @@ GROUP BY 1 ORDER BY 2 DESC;
 
 -- promote an exercise to the PLAN group in the picker
 UPDATE exercises SET is_favorite = true, sort_order = 5 WHERE slug = 'dominadas';
+
+-- what the plan prescribes on a given day
+SELECT p.id AS slot, p.section, p.name, p.sets, p.reps, p.rest
+FROM plan_exercises p JOIN plan_days d ON d.id = p.plan_day_id
+WHERE d.key = 'lunes' ORDER BY (p.section = 'core'), p.position;
+
+-- body composition trend
+SELECT measured_on, weight_kg, body_fat_pct, skeletal_muscle_kg
+FROM body_measurements ORDER BY measured_on;
 ```
 
 Backup: `docker exec postgres pg_dump -U belta1 recomp > recomp.sql`.
@@ -466,12 +533,14 @@ api.mjs                 /api/* routes and validation
 db.mjs                  pg pool, schema, seed
 seed/
   exercises.mjs         exercise catalog (name, group, equipment, favorite, figure key)
+  exercise-meta.mjs     per-exercise load ladder + execution detail, refreshed into `exercises`
+  plan.mjs              the plan, inserted into plan_days/plan_exercises once (bootstrap only)
   exercise-svgs.jsx     27 original figures (from recomp_v2)
   exercise-svgs-extra.jsx  56 new figures + drawing helpers
 pages/
-  recomp_v3.jsx         the dashboard + workout log
-  recomp_v2.jsx         the original, unchanged
-  _lib/recomp/          tokens.jsx (colors), data.jsx (plan, meals, measurements), ui.jsx (shared tabs)
+  recomp_v3.jsx         the dashboard + workout log (plan and measurements from the API)
+  recomp_v2.jsx         the original, unchanged (still renders its own copy of the plan)
+  _lib/recomp/          tokens.jsx (colors), data.jsx (meals, macros, post-workout), ui.jsx (shared tabs)
   hello.jsx, list.jsx   minimal examples of the two page shapes
 scripts/sql.mjs         run SQL with the PG* env vars from a machine without psql
 scripts/import-sesiones.mjs   load a phone-notes training log (see header) through the API; dry run by default
@@ -506,7 +575,7 @@ writes only to its own `coach_data` volume and, through the API, to the workout 
 ```
 phone / claude.ai/code ──Remote Control──▶ coach container ──▶ http://jsx_server:3000/api/*
                                                              ──▶ postgres (role coach_ro, SELECT only)
-                                                             ──▶ /pages (plan data, read-only)
+                                                             ──▶ /pages (nutrition content, read-only)
 ```
 
 What's inside: [`coach/README.md`](coach/README.md). The manual it follows:
@@ -560,34 +629,49 @@ text works too — it recognizes what you mean and uses the same tools.
 
 | You say | What it does | Behind the scenes |
 |---|---|---|
-| `/hoy` · "¿qué toca hoy?" · "¿qué hago el martes?" | The session for today's plan day (or the day you name), as a checklist: exercise → **target load × reps** → one cue, then the post-workout meal. On Fridays it says which rotation week it is. | Runs `hoy`: reads the plan from `/pages/_lib/recomp/data.jsx`, the last 3 sessions of each exercise from `GET /api/exercises/:id/sessions`, and computes a target per exercise (rules below). |
-| "ok, guarda los objetivos" · "de acuerdo" | Writes the targets so the training tab shows **OBJETIVO** on each card. | `hoy --guardar` → `PUT /api/exercises/:id/target`, `set_by: hoy`. |
+| `/hoy` · "¿qué toca hoy?" · "¿qué hago el martes?" | The session for today's plan day (or the day you name), as a checklist: exercise → **target load × reps × series** → one cue, then the post-workout meal. On Fridays it says which rotation week it is. | Runs `hoy`: reads the plan from `GET /api/plan/:day`, the last sessions of each exercise from `GET /api/exercises/:id/sessions`, and rebalances load, reps/seconds and sets per exercise (rules below). |
+| "ok, guarda los objetivos" · "de acuerdo" | Writes the targets so the training tab shows **OBJETIVO** on each card, and applies any change to the prescription itself (series, reps, seconds) to the plan. | `hoy --guardar` → `PUT /api/exercises/:id/target` (`set_by: hoy`) + `PATCH /api/plan/exercises/:slot`. |
+| `/cambiar` · "cambia el remo con barra por remo en máquina" · "saca el peso muerto del miércoles" · "agrega face pull el viernes" | Confirms the slot and the replacement in one line, swaps it, then recomputes the target. **Visible on the dashboard immediately** — the card picks up the new exercise's figure, its CARGA ladder and its execution steps, because those live on the exercise. | `plan <día>` → `plan cambiar <slot> <ejercicio>` (`PATCH /api/plan/exercises/:slot`), then `hoy --day <día> --guardar`. |
+| `/medicion` + a Samsung Health screenshot · "me pesé, 77.8" | Reads weight, body fat, skeletal muscle, BMI, BMR and body water off the image, asks **¿confirmo?**, writes one row for that date, and shows the change vs the previous measurement. It appears on the TELEMETRIA tab. It will not change any load because of a measurement. | `medir <fecha> peso=… grasa=… …` → `PUT /api/measurements` (upsert on the date). Also updates `data/PROFILE.md`. |
 | "banca 40x8 x4 rir2" · "hice press militar 6.5 kg 10 10 9 10" · "plancha 60s x3" · "3 series de 12 con 15 en remo unilateral" | Parses sets, shows a table (exercise · kg · reps or s · RIR · n), asks **¿confirmo?**, logs them, reads the day back. If you gave no RIR it asks once ("¿cuántas te quedaban?"). Then tells you what those sets mean for next time. | `POST /api/sets` per set, `GET /api/sets?date=` after. Names are matched to the catalog (accents ignored); if ambiguous it asks with two options; unknown → offers `POST /api/exercises`. |
 | "eso fue ayer" · "el martes hice…" | Same, for another date. | `date` in the body. |
 | "borra la última serie" · "la S3 fueron 9 reps, no 8" | Fixes or deletes a set, after confirming which one. | `PATCH` / `DELETE /api/sets/:id`. |
 | "¿cuánto pongo en peso muerto?" · "¿subo la banca?" | The target and the reason (rule + numbers: last sessions, e1RM trend, RIR). | Same model as `/hoy`, for one exercise. |
 | "me duele la lumbar" · "dormí 5 horas" · "estoy de viaje sin barra" | Adjusts today's advice: substitutions the plan already has (deadlift → RDL con mancuernas), holds loads, and records the override with its reason so the dashboard shows it. Never coaches through sharp pain. | `PUT /api/exercises/:id/target` with `reason`; durable facts go to `data/PROFILE.md`. |
 | `/revision` · "¿cómo voy?" · "resumen de la semana" | Adherence vs the plan's 6 days, volume by empuje / halar / pierna vs last week, PRs (e1RM ▲), stalled exercises with what it would change, plank trend; ends with ≤ 3 concrete changes or "sin cambios". Decisions are written to `data/history/coach-notes.md`. | `semana` (`--days 14` for two weeks, a date for a past week). |
-| "pesé 77.1 y 20.8 %" | Records the measurement with the date in `data/PROFILE.md` and compares with the goal line (21.6 % → 16 %). | Profile file in the `coach_data` volume. |
 | `/importar` + pasted phone notes (`[07:27, 9/1/2026]` … format) | Saves the paste to `data/notas/`, dry-runs the import, shows the mapping (your shorthand → catalog name), asks **¿aplico?**, imports. Re-running skips what is already logged. | `importar` → `scripts/import-sesiones.mjs` → `POST /api/sets`. |
 | "¿qué dijimos sobre X?" · "¿por qué el plan no tiene dominadas?" | Answers from the earlier claude.ai conversation and its own notes. | Reads `data/history/*.md`. |
 | "¿cuántas series de pierna hice en septiembre?" | Ad-hoc questions over the whole log. | `sql "select …"` as the read-only role, or the API. |
 | "guarda esto en history/" + a pasted conversation | Keeps it for future context. | Writes under `data/history/`. |
 
-What it will not do: invent a number that is not in the log or the plan; log anything
-without showing it first; change the plan itself (the plan is a file in the repo, edited
-on your PC — it will note suggested changes under "App" in `coach-notes.md`); touch the app
-code or the database directly (SELECT only; writes go through the API's validation).
+What it will not do: invent a number that is not in the log or the plan; log anything —
+a set, a plan change, a measurement — without showing it first and asking; change loads
+because of a measurement; touch the app code or the database directly (SELECT only;
+writes go through the API's validation). It *can* change the plan now, because the plan
+is data: swaps, prescriptions and targets are writes to the DB, live on your next page
+load. Changes to the app itself still go through the repo, noted under "App" in
+`coach-notes.md`.
 
 ### How it chooses a load
 
 `coach/bin/hoy.mjs` — deterministic, so the same history always gives the same target.
-Per exercise, using the last sessions and the plan's rep range (e.g. `6–8`):
+Per exercise, using the last sessions, how regularly it is actually trained, and the
+plan's rep range (e.g. `6–8`). It rebalances three numbers: the load, the reps or
+seconds, and sometimes the number of sets.
+
+**Regularity first**, because a load that was right three weeks ago is not right now:
+
+- No history at all → the exercise's own starting load (`load_start`, the card's INICIO).
+- **28+ days** since that movement (or nothing in the last 28 days with history before) →
+  reentry: −15 % and rebuild, and one set less this week on a 4-set exercise.
+- **15–28 days** → repeat the last load and win the reps back before adding kg.
+
+Then, on regular training (a session within the last two weeks):
 
 1. **Stall** — best e1RM (Epley: load × (1 + reps/30), best set of a session) has not
-   improved ≥ 1 % over the last 3 sessions → deload −10 % and rebuild, or change the rep
-   range. If the weight is too light to deload meaningfully (5 kg dumbbells), keep it and
-   raise the rep target instead.
+   improved ≥ 1 % over the last 3 sessions → deload −10 % and rebuild. If the weight is
+   too light to deload meaningfully (5 kg dumbbells, bodyweight), keep it and raise the
+   rep range **in the plan** instead.
 2. **Out of range** — every set above the range → at least one step up (or the e1RM load
    for top + 1 reps if higher); every set below → the e1RM load that leaves ~2 reps in
    reserve at the top of the range.
@@ -595,12 +679,17 @@ Per exercise, using the last sessions and the plan's rep range (e.g. `6–8`):
    now; RIR 0–1 → repeat (the reps were forced); no RIR logged → +1 step only if the
    previous session also topped out.
 4. Any set **under the bottom** of the range → −5 %.
-5. Otherwise **repeat** the load and add reps.
+5. **Volume** — trained 3+ times in four weeks, e1RM flat, and the plan only asks for 3
+   sets or fewer → same load, one more set (written into the plan).
+6. Otherwise **repeat** the load and add reps.
 
-Steps: +2.5 kg barbell / cable / machine, +1 kg per dumbbell. Timed sets (planks): reach
-the plan's seconds, then +5 s per session. Target effort is RIR 2; the last set of a
-compound may go to 1. `hoy` prints the rule it applied next to each target, and the
-coach quotes it.
+Steps: +2.5 kg barbell / cable / machine, +1 kg per dumbbell. Timed sets (planks) climb
+5 s per session and, once the top of the range is held, the range itself moves up 5 s.
+e1RM is only trusted up to 12 reps: on higher-rep ranges the reps are the target and the
+load stays put. Every rule is a fixed point — running `hoy --guardar` twice changes
+nothing the second time. Target effort is RIR 2; the last set of a compound may go to 1. `hoy` prints the rule it applied next
+to each target, and the coach quotes it. Lines prefixed `plan:` are changes to the
+prescription itself; `hoy --guardar` writes them, nothing else does.
 
 ### Operating it
 

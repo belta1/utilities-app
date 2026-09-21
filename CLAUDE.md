@@ -17,11 +17,21 @@ server.mjs      http server: page routing, SSR + hydration bundle, "/" = HOME_PA
 jsx.mjs         esbuild wrappers: expression pages, module pages, browser bundle
 api.mjs         /api/* router + handlers (exercises, sets); validation helpers
 db.mjs          pg pool, SCHEMA (CREATE TABLE IF NOT EXISTS), idempotent seed()
-seed/           exercise catalog + SVG figures rendered into the DB at startup
+seed/           exercise catalog, per-exercise reference material, the plan, SVG figures
 pages/          one .jsx = one route  (pages/foo.jsx → GET /foo, pages/a/b.jsx → /a/b)
 pages/_lib/     private modules, importable but never served (any "_" path segment)
-pages/_lib/recomp/{tokens,data,ui}.jsx   design tokens, plan/meal data, shared tabs
+pages/_lib/recomp/{tokens,data,ui}.jsx   design tokens, meal/macro content, shared tabs
+coach/bin/      the coach's CLI tools (hoy, semana, plan, medir, importar, api, sql)
 ```
+
+**The RECOMP data lives in Postgres, not in the page.** The plan (`plan_days` /
+`plan_exercises`), each exercise's figure, load ladder and execution detail
+(`exercises`), the coach's targets (`exercise_targets`) and the body measurements
+(`body_measurements`) are all rows; `pages/recomp_v3.jsx` fetches them. So changing what
+the dashboard shows — swapping an exercise, rebalancing reps, adding a measurement — is
+an API call the coach makes, not an edit here. `seed/plan.mjs` only bootstraps an empty
+`plan_days`; it never overwrites. `recomp_v2.jsx` is the frozen original and still
+carries its own hard-coded copy of everything.
 
 Node 24, ESM only (`.mjs`), no build step, no test runner, no TypeScript, no linter.
 
@@ -69,6 +79,12 @@ in `server.mjs`); there is no index listing.
   There are no migrations; changing an existing column means an `ALTER … IF NOT EXISTS`
   statement in `SCHEMA`.
 - Seeds: `seed()` runs on every start and must stay idempotent (upsert / insert-on-new).
+  Three policies, and they matter: images and the exercise reference material from
+  `seed/exercise-meta.mjs` are refreshed every start (but only where the seed has a
+  value, so coach-written values on other exercises survive); exercise rows are
+  insert-only; the plan is inserted **once**, when `plan_days` is empty, and never again
+  — a deploy must not undo a swap the coach made. To reset it: `DELETE FROM plan_days;`
+  and restart.
 - Routes: add `[method, /^\/api\/…$/, handler]` to `routes` in `api.mjs`. Handlers get
   `(match, searchParams, body)` and return JSON; throw `ApiError(status, msg)` or use
   `bad(msg)`; validate with `asDate` / `asNumber` / `asText`. Everything under `/api/`
@@ -80,7 +96,14 @@ in `server.mjs`); there is no index listing.
   `rir` (reps in reserve, 0–5) is optional and drives the coach's progression.
 - `exercise_targets` (one row per exercise) is what the training cards show as OBJETIVO; the
   coach writes it (`hoy --guardar` or `PUT /api/exercises/:id/target`). Progression logic lives
-  in `coach/bin/hoy.mjs` (e1RM, RIR, stall/deload), not in the server.
+  in `coach/bin/hoy.mjs` (regularity, e1RM, RIR, stall/deload), not in the server.
+- A plan slot may have `exercise_id` null — the Les Mills / cycling placeholders. Show
+  them, never try to log them. `PATCH /api/plan/exercises/:id` with an `exercise_id` is
+  the swap: it renames the slot to the catalog name unless a `name` comes with it, and
+  the card's figure, CARGA block and MUSCULOS / EJECUCION follow the new exercise because
+  they are columns on `exercises`.
+- `body_measurements` is upserted on `measured_on`, and `GET /api/measurements` returns
+  **oldest first** (the sparkline's order) — the only endpoint that does.
 
 ## Scripts
 

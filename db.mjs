@@ -6,6 +6,8 @@ import pg from "pg";
 import { renderToStaticMarkup } from "react-dom/server";
 import { loadModuleFile } from "./jsx.mjs";
 import { EXERCISES, slugify } from "./seed/exercises.mjs";
+import { EXERCISE_LOADS, EXERCISE_DETAIL } from "./seed/exercise-meta.mjs";
+import { PLAN_DAYS } from "./seed/plan.mjs";
 
 const APP_DIR = path.dirname(fileURLToPath(import.meta.url));
 
@@ -65,6 +67,73 @@ const SCHEMA = `
   -- progression uses it when present.
   ALTER TABLE workout_sets ADD COLUMN IF NOT EXISTS rir smallint CHECK (rir BETWEEN 0 AND 5);
 
+  -- Reference material shown on a training card. It lives on the exercise, not on the
+  -- plan slot, so swapping an exercise into a slot brings its figure, its load ladder
+  -- (INICIO / SEM_06) and its execution detail along with it. seed/exercise-meta.mjs
+  -- refreshes these on every start, but only where it has a value: anything the coach
+  -- wrote through the API for an exercise the seed says nothing about survives.
+  ALTER TABLE exercises ADD COLUMN IF NOT EXISTS load_start    text;
+  ALTER TABLE exercises ADD COLUMN IF NOT EXISTS load_target   text;
+  ALTER TABLE exercises ADD COLUMN IF NOT EXISTS load_note     text;
+  ALTER TABLE exercises ADD COLUMN IF NOT EXISTS muscles       text;
+  ALTER TABLE exercises ADD COLUMN IF NOT EXISTS steps         text[];
+  ALTER TABLE exercises ADD COLUMN IF NOT EXISTS common_error  text;
+
+  -- The plan the training tab renders: one row per day, one row per prescribed slot.
+  -- seed/plan.mjs fills these once, when they are empty; after that the DB is the
+  -- source of truth and the coach edits it (swap an exercise, rebalance reps) through
+  -- /api/plan. key is the day folded to ascii with "+" stripped: "Core+" -> "core".
+  CREATE TABLE IF NOT EXISTS plan_days (
+    id           serial PRIMARY KEY,
+    key          text UNIQUE NOT NULL,
+    day          text NOT NULL,
+    label        text NOT NULL,
+    type         text NOT NULL,
+    focus        text,
+    source       text,
+    tip          text,
+    post_key     text,
+    is_optional  boolean NOT NULL DEFAULT false,
+    sort_order   integer NOT NULL DEFAULT 1000
+  );
+  -- One prescribed exercise. section is 'main' or 'core' (the core finisher list).
+  -- exercise_id points at the catalog — null only for the cardio/recovery placeholders
+  -- ("BODYATTACK (45-55 min)"), which are not logged; name is what the card shows.
+  CREATE TABLE IF NOT EXISTS plan_exercises (
+    id           serial PRIMARY KEY,
+    plan_day_id  integer NOT NULL REFERENCES plan_days(id) ON DELETE CASCADE,
+    section      text NOT NULL DEFAULT 'main' CHECK (section IN ('main', 'core')),
+    position     integer NOT NULL,
+    exercise_id  integer REFERENCES exercises(id),
+    name         text NOT NULL,
+    sets         text,
+    reps         text,
+    rest         text,
+    note         text,
+    updated_at   timestamptz NOT NULL DEFAULT now()
+  );
+  CREATE INDEX IF NOT EXISTS plan_exercises_day_idx ON plan_exercises (plan_day_id, section, position);
+
+  -- Body composition, one row per measurement day. Written by the Samsung Health parser
+  -- (the coach reads a screenshot and POSTs it) and read by the dashboard's telemetry.
+  CREATE TABLE IF NOT EXISTS body_measurements (
+    id                  serial PRIMARY KEY,
+    measured_on         date UNIQUE NOT NULL,
+    weight_kg           numeric(5,2),
+    body_fat_pct        numeric(4,1),
+    fat_mass_kg         numeric(5,2),
+    skeletal_muscle_kg  numeric(5,2),
+    bmi                 numeric(4,1),
+    bmr_kcal            integer,
+    body_water_kg       numeric(5,2),
+    protein_kg          numeric(5,2),
+    minerals_kg         numeric(5,2),
+    visceral_fat_level  numeric(4,1),
+    source              text NOT NULL DEFAULT 'samsung_health',
+    note                text,
+    updated_at          timestamptz NOT NULL DEFAULT now()
+  );
+
   -- What to lift next time, per exercise, written by the coach (or hoy --guardar) and
   -- shown on the training tab. One row per exercise; overwritten, never appended.
   CREATE TABLE IF NOT EXISTS exercise_targets (
@@ -83,9 +152,15 @@ export async function migrate() {
   await query(SCHEMA);
 }
 
+// `key` for a plan day: the day name folded to ascii, "+" stripped. Core+ -> core.
+export const planKey = (day) => day.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\+/g, "").trim();
+
 // Images are re-rendered from seed/exercise-svgs*.jsx on every start (upsert), so a
 // change to a figure ships with the next deploy. Exercises are insert-only, except
-// image_key, which the seed owns.
+// image_key and the reference material (load ladder, muscles, steps, common error),
+// which the seed owns wherever it has a value. The plan is different: it is inserted
+// once, when plan_days is empty, and never touched again — after that it is the coach
+// who edits it through /api/plan, and a deploy must not undo a swap he made.
 export async function seed() {
   const seedDir = path.join(APP_DIR, "seed");
   const { buildSvgs, SVG_KEYS } = await loadModuleFile(path.join(seedDir, "exercise-svgs.jsx"));
@@ -105,21 +180,63 @@ export async function seed() {
     }
     let inserted = 0;
     for (const [i, e] of EXERCISES.entries()) {
+      const load = EXERCISE_LOADS[e.name] ?? {};
+      const detail = EXERCISE_DETAIL[e.name] ?? {};
       const { rows } = await client.query(
-        `INSERT INTO exercises (slug, name, muscle_group, equipment, is_favorite, sort_order, image_key)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
-         ON CONFLICT (slug) DO UPDATE SET image_key = EXCLUDED.image_key
+        `INSERT INTO exercises (slug, name, muscle_group, equipment, is_favorite, sort_order, image_key,
+                                load_start, load_target, load_note, muscles, steps, common_error)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+         ON CONFLICT (slug) DO UPDATE SET
+           image_key    = EXCLUDED.image_key,
+           load_start   = coalesce(EXCLUDED.load_start, exercises.load_start),
+           load_target  = coalesce(EXCLUDED.load_target, exercises.load_target),
+           load_note    = coalesce(EXCLUDED.load_note, exercises.load_note),
+           muscles      = coalesce(EXCLUDED.muscles, exercises.muscles),
+           steps        = coalesce(EXCLUDED.steps, exercises.steps),
+           common_error = coalesce(EXCLUDED.common_error, exercises.common_error)
          RETURNING (xmax = 0) AS inserted`,
-        [slugify(e.name), e.name, e.group, e.equipment, e.favorite, i * 10, e.image],
+        [slugify(e.name), e.name, e.group, e.equipment, e.favorite, i * 10, e.image,
+         load.start ?? null, load.target ?? null, load.note ?? null,
+         detail.musculos ?? null, detail.pasos ?? null, detail.error ?? null],
       );
       if (rows[0].inserted) inserted++;
     }
+    const planDays = await seedPlan(client);
     await client.query("COMMIT");
-    return { images: Object.keys(images).length, exercisesInserted: inserted };
+    return { images: Object.keys(images).length, exercisesInserted: inserted, planDays };
   } catch (err) {
     await client.query("ROLLBACK");
     throw err;
   } finally {
     client.release();
   }
+}
+
+// Bootstrap the plan from seed/plan.mjs, once. Returns the number of days inserted (0
+// on every start after the first). Slots are matched to the catalog by name; the ones
+// that have no match (the Les Mills / cycling placeholders) keep exercise_id null and
+// are shown, but not logged.
+async function seedPlan(client) {
+  const { rows: [{ count }] } = await client.query("SELECT count(*)::int AS count FROM plan_days");
+  if (count > 0) return 0;
+  const { rows: catalog } = await client.query("SELECT id, name FROM exercises");
+  const byName = new Map(catalog.map((e) => [e.name, e.id]));
+  for (const [i, d] of PLAN_DAYS.entries()) {
+    const { rows: [day] } = await client.query(
+      `INSERT INTO plan_days (key, day, label, type, focus, source, tip, post_key, is_optional, sort_order)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
+      [planKey(d.day), d.day, d.label, d.type, d.focus ?? null, d.source ?? null, d.tip ?? null,
+       d.postKey ?? null, d.optional === true, i * 10],
+    );
+    for (const [section, list] of [["main", d.exercises ?? []], ["core", d.core ?? []]]) {
+      for (const [j, x] of list.entries()) {
+        await client.query(
+          `INSERT INTO plan_exercises (plan_day_id, section, position, exercise_id, name, sets, reps, rest, note)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+          [day.id, section, (j + 1) * 10, byName.get(x.name) ?? null, x.name, x.sets ?? null, x.reps ?? null, x.rest ?? null, x.note ?? null],
+        );
+      }
+    }
+  }
+  return PLAN_DAYS.length;
 }

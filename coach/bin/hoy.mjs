@@ -1,26 +1,39 @@
 #!/usr/bin/env node
-// Today's session from the plan, with recent history per exercise and a load target
-// derived from it. Deterministic: the coach reads this, it does not compute by hand.
+// Today's session, read from the plan in the database, with recent history per exercise
+// and a rebalanced target derived from it. Deterministic: the coach reads this, it does
+// not compute by hand.
 //
 //   hoy                       today
 //   hoy 2026-09-22            another date
 //   hoy --day martes          force a plan day (lunes|martes|miercoles|jueves|viernes|sabado|core|domingo)
-//   hoy --guardar             also write the targets to the DB (shown on the dashboard's cards)
+//   hoy --guardar             write the rebalance back: targets always, and the plan's
+//                             own sets / reps / seconds when a rule changed them
 //   hoy --json                machine-readable
 //
-// How a target is chosen (reps exercises), in order:
-//   1. Stall: best e1RM has not improved (≥1 %) over the last 3 sessions → deload −10 %,
-//      then rebuild, or change the rep range.
-//   2. Last session outside the plan's rep range (e.g. did 12s, plan says 6–8) → load from
-//      e1RM for (top of range + 2) reps, i.e. the load that leaves ~2 reps in reserve.
-//   3. Every set at the top of the range: RIR ≥ 2 recorded → +1 step now; RIR not recorded
-//      → +1 step if the previous session also topped out (the two-session rule);
-//      RIR 0–1 → repeat (reps were forced).
-//   4. Any set under the bottom of the range → −5 %.
+// The rebalance answers two questions per exercise: how hard (load) and how much
+// (reps or seconds, and how many sets). Regularity comes first, because a load that was
+// right three weeks ago is not right after three weeks off:
+//   R1. Never done          -> the plan's starting load (exercises.load_start).
+//   R2. 28+ days since      -> reentry: -15 % and rebuild; one set less if the plan has 4+.
+//   R3. 15–28 days since    -> repeat the last load, no progression.
+//   R4. Done, but 0 sessions in the last 28 days with history before that -> as R2.
+// Then the progression ladder, on regular training (a session within two weeks):
+//   1. Stall: best e1RM has not improved (>=1 %) over the last 3 sessions. Stuck at the
+//      top of the range with no margin left (RIR 0-1, or none recorded) -> the range is
+//      the ceiling, not the load: same weight, rep range raised in the plan. Stuck below
+//      the top -> deload -10 % and rebuild.
+//   2. Last session outside the plan's rep range -> load from e1RM for (top of range + 2)
+//      reps above it, or a step up when every set was above it.
+//   3. Every set at the top of the range: RIR >= 2 -> +1 step now; RIR not recorded -> +1
+//      step if the previous session also topped out (the two-session rule); RIR 0–1 ->
+//      repeat (reps were forced).
+//   4. Any set under the bottom of the range -> -5 %.
 //   5. Otherwise repeat the load and add reps.
-// Steps: +2.5 kg barbell/cable/machine, +1 kg per dumbbell. Timed sets: +5 s once the
-// plan's range is reached. e1RM is Epley: load × (1 + reps / 30), best set of a session.
-import { loadModuleFile } from "/app/jsx.mjs";
+// Steps: +2.5 kg barbell/cable/machine, +1 kg per dumbbell. Timed sets climb 5 s at a
+// time and, once the top of the range is held, the range itself moves up 5 s in the plan.
+// e1RM is Epley: load x (1 + reps/30), best set of a session; it is only trusted up to
+// 12 reps, so on higher-rep ranges the reps are the target and the load stays put.
+// Every rule is a fixed point: running --guardar twice changes nothing the second time.
 
 const API = process.env.API_URL ?? "http://localhost:3000";
 const args = process.argv.slice(2);
@@ -33,18 +46,8 @@ const pad = (n) => String(n).padStart(2, "0");
 const localDate = (d = new Date()) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const date = dateArg ?? localDate();
 const dow = new Date(date + "T12:00:00").getDay();               // 0 = Sunday
-const fold = (s) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-
-const { days, weightSuggestions } = await loadModuleFile(`${process.env.PAGES_DIR ?? "/app/pages"}/_lib/recomp/data.jsx`);
-const byKey = Object.fromEntries(days.map((d) => [fold(d.day).replace("+", ""), d]));
-const weekday = ["domingo", "lunes", "martes", "miercoles", "jueves", "viernes", "sabado"][dow];
-const plan = byKey[fold(dayArg ?? weekday)] ?? byKey[weekday];
-if (!plan) { console.error(`no plan day for "${dayArg}"; use lunes|martes|miercoles|jueves|viernes|sabado|core|domingo`); process.exit(2); }
-
-// Friday alternates: even ISO week = Semana A (empuje), odd = Semana B (halar).
-const isoWeek = (d) => { const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate())); const day = t.getUTCDay() || 7; t.setUTCDate(t.getUTCDate() + 4 - day); const y0 = new Date(Date.UTC(t.getUTCFullYear(), 0, 1)); return Math.ceil(((t - y0) / 864e5 + 1) / 7); };
-const semana = isoWeek(new Date(date + "T12:00:00")) % 2 === 0 ? "A" : "B";
-const inRotation = (ex) => !/^Semana [AB]/.test(ex.note ?? "") || ex.note.startsWith(`Semana ${semana}`);
+const fold = (s) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+const daysBetween = (a, b) => Math.round((new Date(a + "T12:00:00") - new Date(b + "T12:00:00")) / 864e5);
 
 const call = async (method, p, body) => {
   const r = await fetch(API + p, { method, headers: body ? { "content-type": "application/json" } : undefined, body: body ? JSON.stringify(body) : undefined });
@@ -52,110 +55,206 @@ const call = async (method, p, body) => {
   return r.json();
 };
 const get = (p) => call("GET", p);
-const catalog = await get("/api/exercises");
-const byName = Object.fromEntries(catalog.map((e) => [e.name, e]));
+
+const weekday = ["domingo", "lunes", "martes", "miercoles", "jueves", "viernes", "sabado"][dow];
+const key = fold(dayArg ?? weekday).replace(/\+/g, "").trim();
+let plan;
+try {
+  plan = await get(`/api/plan/${encodeURIComponent(key)}`);
+} catch (err) {
+  const all = await get("/api/plan").catch(() => []);
+  console.error(`no plan day "${key}"; use ${all.map((d) => d.key).join("|") || "lunes|martes|miercoles|jueves|viernes|sabado|core|domingo"}`);
+  process.exit(2);
+}
+
+// Friday alternates: even ISO week = Semana A (empuje), odd = Semana B (halar).
+const isoWeek = (d) => { const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate())); const day = t.getUTCDay() || 7; t.setUTCDate(t.getUTCDate() + 4 - day); const y0 = new Date(Date.UTC(t.getUTCFullYear(), 0, 1)); return Math.ceil(((t - y0) / 864e5 + 1) / 7); };
+const semana = isoWeek(new Date(date + "T12:00:00")) % 2 === 0 ? "A" : "B";
+const inRotation = (ex) => !/^Semana [AB]/.test(ex.note ?? "") || ex.note.startsWith(`Semana ${semana}`);
+
 const today = await get(`/api/sets?date=${date}`);
 
-const range = (reps) => { const m = /(\d+)\s*[–-]\s*(\d+)/.exec(reps) ?? /(\d+)/.exec(reps); return m ? { lo: Number(m[1]), hi: Number(m[2] ?? m[1]) } : null; };
-const timed = (ex) => /seg/i.test(ex.reps);
-const step = (e) => (e.equipment === "Mancuernas" ? 1 : e.equipment === "Peso corporal" ? 0 : 2.5);
+const range = (reps) => { const m = /(\d+)\s*[–-]\s*(\d+)/.exec(reps ?? "") ?? /(\d+)/.exec(reps ?? ""); return m ? { lo: Number(m[1]), hi: Number(m[2] ?? m[1]) } : null; };
+const timed = (ex) => /seg/i.test(ex.reps ?? "");
+const step = (ex) => (ex.equipment === "Mancuernas" ? 1 : ex.equipment === "Peso corporal" ? 0 : 2.5);
 const roundTo = (x, s) => (s ? Math.round(x / s) * s : Math.round(x * 2) / 2);
 const fmtSet = (s) => (s.duration_s ? `${s.duration_s}s` : `${s.load_kg}×${s.reps}${s.rir != null ? `r${s.rir}` : ""}`);
 const e1rm = (s) => (s.reps ? s.load_kg * (1 + s.reps / 30) : 0);
 const bestE1rm = (sess) => Math.max(...sess.sets.map(e1rm));
-const perHand = (e) => (e.equipment === "Mancuernas" ? " c/u" : "");
+const perHand = (ex) => (ex.equipment === "Mancuernas" ? " c/u" : "");
 
-function suggest(ex, e, sessions) {
+// How regularly this exercise has actually been trained, which decides whether the
+// progression ladder applies at all.
+function regularity(sessions) {
+  if (!sessions.length) return { gap: null, last: null, inLast28: 0, avgGap: null };
+  const last = sessions[0].performed_on;
+  const inLast28 = sessions.filter((s) => daysBetween(date, s.performed_on) <= 28).length;
+  const gaps = sessions.slice(0, 5).map((s, i, a) => (i ? daysBetween(a[i - 1].performed_on, s.performed_on) : null)).filter((n) => n != null);
+  return { gap: daysBetween(date, last), last, inLast28, avgGap: gaps.length ? Math.round(gaps.reduce((a, b) => a + b, 0) / gaps.length) : null };
+}
+
+// `planSets` / `planReps` are set only when the rule wants the plan itself rewritten;
+// `hoy --guardar` then PATCHes the slot so the dashboard card shows the new prescription.
+function suggest(ex, sessions, reg) {
   const r = range(ex.reps);
   const last = sessions[0], prev = sessions[1];
+  const sets = Number(ex.sets) || null;
+
   if (timed(ex)) {
     const best = last ? Math.max(...last.sets.map((s) => s.duration_s ?? 0)) : null;
-    if (!best) return { load: null, reps: ex.reps, why: "primera vez" };
-    const next = r && best < r.hi ? r.hi : best + 5;
-    return { load: null, reps: `${next} s`, why: best < (r?.hi ?? 0) ? `ultima ${best}s → llegar a ${r.hi}` : `ultima ${best}s → +5 s` };
+    if (!best) return { load: null, reps: ex.reps, why: "primera vez — empieza en el rango del plan" };
+    if (reg.gap > 28) {
+      const back = Math.max(15, Math.round((best * 0.8) / 5) * 5);
+      return { load: null, reps: `${back} seg`, planReps: `${back}-${back + 10} seg`, why: `${reg.gap} dias sin hacerlo → reentrada, de ${best}s a ${back}s` };
+    }
+    if (reg.gap > 14) return { load: null, reps: `${best} seg`, why: `${reg.gap} dias sin hacerlo → repetir ${best}s antes de subir` };
+    // Climb by 5 s at a time, never jump to the top of the range; once the top is
+    // reached the range itself moves up 5 s, so the plan keeps pace with him.
+    const next = r && best < r.lo ? Math.min(best + 5, r.lo) : best + 5;
+    return {
+      load: null, reps: `${next} seg`,
+      planReps: r && best >= r.hi ? `${r.lo + 5}-${r.hi + 5} seg` : undefined,
+      why: r && best < r.lo ? `ultima ${best}s → subir a ${next}s, rango ${r.lo}–${r.hi}s`
+        : r && best < r.hi ? `ultima ${best}s → +5 s dentro del rango ${r.lo}–${r.hi}s`
+          : `ultima ${best}s → tope del rango, +5 s y el plan sube a ${r ? `${r.lo + 5}-${r.hi + 5}` : "?"} s`,
+    };
   }
+
+  // R1 — no history at all: the plan's starting load.
   if (!last) {
-    const w = weightSuggestions[ex.name];
-    return { load: null, reps: ex.reps, why: w ? `sin historial — inicio del plan: ${w.start}` : "sin historial — a criterio", start: w?.start };
+    return { load: null, reps: ex.reps, why: ex.load_start ? `sin historial — inicio del plan: ${ex.load_start}` : "sin historial — a criterio", start: ex.load_start };
   }
-  const inc = step(e);
+
+  const inc = step(ex);
   const load = Math.max(...last.sets.map((s) => s.load_kg));
   const e1 = sessions.map(bestE1rm);
   const trend = e1.length >= 2 ? `e1RM ${e1[0].toFixed(1)} (antes ${e1[1].toFixed(1)})` : `e1RM ${e1[0].toFixed(1)}`;
 
-  // 1. stall: three sessions without a ≥1 % gain over the best before them
-  if (e1.length >= 4 && e1.slice(0, 3).every((v) => v < Math.max(...e1.slice(3)) * 1.01)) {
-    const dl = roundTo(load * 0.9, inc);
-    if (dl < load) return { load: dl, reps: ex.reps, why: `estancado 3 sesiones (${trend}) → descarga -10 % y reconstruir, o cambiar rango`, stall: true };
-    // too light for a meaningful deload step: change the stimulus instead
-    return { load, reps: `${(r?.hi ?? 12) + 3}+`, why: `estancado 3 sesiones (${trend}) con carga minima → mismo peso, subir reps a ${(r?.hi ?? 12) + 3} o cambiar variante`, stall: true };
+  // R2/R4 — a long layoff. Rebuild rather than pick up where he left off, and take a set
+  // off a 4+ set prescription for the first week back.
+  if (reg.gap > 28 || reg.inLast28 === 0) {
+    const back = roundTo(load * 0.85, inc);
+    return {
+      load: Math.min(back, load), reps: ex.reps,
+      planSets: sets && sets >= 4 ? String(sets - 1) : undefined,
+      why: `${reg.gap} dias sin hacerlo → reentrada -15 % (${load} → ${Math.min(back, load)} kg${perHand(ex)})${sets && sets >= 4 ? `, ${sets - 1} series esta vez` : ""}`,
+      regression: true,
+    };
   }
-  // 2. history outside the plan's range. Above it on every set: proven room → at least one
-  //    step up, or the e1RM load for (top + 1) reps if that is more. Below it on every
-  //    set: the e1RM load that leaves ~2 reps in reserve at the top of the range.
+  // R3 — irregular but not cold: hold the load, win the reps back first.
+  if (reg.gap > 14) {
+    return { load, reps: ex.reps, why: `${reg.gap} dias sin hacerlo → repetir ${load} kg${perHand(ex)} y recuperar reps` };
+  }
+
+  const top = (sess) => sess && r && sess.sets.every((s) => s.reps >= r.hi);
+  const rirs = last.sets.map((s) => s.rir).filter((v) => v != null);
+  const minRir = rirs.length ? Math.min(...rirs) : null;
   const lastReps = last.sets.map((s) => s.reps).filter(Boolean);
+  // Every set below the bottom of the range: the range is ahead of him, which is what
+  // rule 1 leaves behind when it raises one. Not a stall — don't let rule 1 see it.
+  const belowRange = r && lastReps.length && lastReps.every((n) => n < r.lo);
+  // Epley is only worth trusting up to ~12 reps; above that the range is the target and
+  // the load stays where it is.
+  const highRep = r && r.hi > 12;
+
+  // 1. stall: three sessions without a >=1 % gain over the best before them. Which way
+  //    out depends on where the reps sat. Already at the top of the range with no margin
+  //    left (RIR 0–1) means the range is the ceiling, not the load — widen it, in the
+  //    plan, and keep the weight. Stuck below the top is fatigue: deload and rebuild.
+  if (!belowRange && e1.length >= 4 && e1.slice(0, 3).every((v) => v < Math.max(...e1.slice(3)) * 1.01)) {
+    const dl = roundTo(load * 0.9, inc);
+    if (top(last) && (minRir == null || minRir <= 1)) {
+      const lo = r.hi + 3, hi = lo + 2;
+      return { load, reps: `${lo}–${hi}`, planReps: `${lo}–${hi}`, why: `estancado 3 sesiones en el tope de ${r.lo}–${r.hi} sin margen (${trend}) → mismo peso, rango a ${lo}–${hi} reps`, stall: true };
+    }
+    if (dl < load) return { load: dl, reps: ex.reps, why: `estancado 3 sesiones (${trend}) → descarga -10 % y reconstruir`, stall: true };
+    // too light even to deload a step: change the stimulus instead, in the plan
+    const lo = (r?.hi ?? 12) + 3, hi = lo + 2;
+    return { load, reps: `${lo}–${hi}`, planReps: `${lo}–${hi}`, why: `estancado 3 sesiones (${trend}) con carga minima → mismo peso, rango a ${lo}–${hi} reps`, stall: true };
+  }
+  // 2. history outside the plan's range
   if (r && lastReps.length && lastReps.every((n) => n > r.hi + 2)) {
     const target = Math.max(load + inc, roundTo(e1[0] / (1 + (r.hi + 1) / 30), inc));
-    return { load: target, reps: ex.reps, why: `ultima sesion sobre el rango ${r.lo}–${r.hi} (${lastReps.join("/")} reps) → subir a ${target} kg${perHand(e)} (e1RM ${e1[0].toFixed(1)})` };
+    return { load: target, reps: ex.reps, why: `ultima sesion sobre el rango ${r.lo}–${r.hi} (${lastReps.join("/")} reps) → subir a ${target} kg${perHand(ex)} (e1RM ${e1[0].toFixed(1)})` };
+  }
+  if (belowRange && highRep) {
+    return { load, reps: ex.reps, why: `rango ${r.lo}–${r.hi} por encima de lo hecho (${lastReps.join("/")} reps) → misma carga, subir reps hasta ${r.lo}` };
   }
   if (r && lastReps.length && lastReps.every((n) => n < r.lo - 2)) {
     const target = roundTo(e1[0] / (1 + (r.hi + 2) / 30), inc);
     return { load: target, reps: ex.reps, why: `ultima sesion bajo el rango ${r.lo}–${r.hi} (${lastReps.join("/")} reps) → carga por e1RM ${e1[0].toFixed(1)} para ${r.hi}+2` };
   }
-  const top = (sess) => sess && r && sess.sets.every((s) => s.reps >= r.hi);
-  const rirs = last.sets.map((s) => s.rir).filter((v) => v != null);
-  const minRir = rirs.length ? Math.min(...rirs) : null;
   // 3. topped out
   if (top(last)) {
-    if (minRir != null && minRir >= 2) return { load: load + inc, reps: ex.reps, why: `tope ${r.hi} con RIR ${minRir} → +${inc} kg${perHand(e)}` };
+    if (minRir != null && minRir >= 2) return { load: load + inc, reps: ex.reps, why: `tope ${r.hi} con RIR ${minRir} → +${inc} kg${perHand(ex)}` };
     if (minRir != null) return { load, reps: ex.reps, why: `tope ${r.hi} pero RIR ${minRir} — repetir, sube cuando quede margen` };
-    if (top(prev)) return { load: load + inc, reps: ex.reps, why: `2 sesiones en el tope (${r.hi}) → +${inc} kg${perHand(e)}` };
+    if (top(prev)) return { load: load + inc, reps: ex.reps, why: `2 sesiones en el tope (${r.hi}) → +${inc} kg${perHand(ex)}` };
     return { load, reps: ex.reps, why: `tope alcanzado 1 vez — repetir; si se repite (o RIR ≥ 2), sube` };
   }
   // 4. under the range
   if (r && last.sets.some((s) => s.reps < r.lo)) {
     return { load: roundTo(load * 0.95, inc), reps: ex.reps, why: `series bajo ${r.lo} reps → -5 %` };
   }
-  // 5. in range
+  // 5. in range. Training it 3+ times in four weeks earns an extra set on a short
+  //    prescription — the cheapest volume there is when the load is not moving.
+  if (reg.inLast28 >= 3 && sets && sets <= 3 && e1.length >= 3 && e1[0] <= e1[1]) {
+    return { load, reps: ex.reps, planSets: String(sets + 1), why: `${reg.inLast28} sesiones en 4 semanas y carga estancada → misma carga, ${sets + 1} series` };
+  }
   return { load, reps: ex.reps, why: `dentro del rango — repetir y ganar reps (${trend})` };
 }
 
+const slots = (plan.exercises ?? []).filter(inRotation);
 const rows = [];
-for (const ex of [...(plan.exercises ?? []), ...(plan.core ?? [])].filter(inRotation)) {
-  const e = byName[ex.name];
-  if (!e) { rows.push({ name: ex.name, plan: `${ex.sets}×${ex.reps}`, note: "no esta en el catalogo" }); continue; }
-  const sessions = await get(`/api/exercises/${e.id}/sessions?before=${date}&limit=6`);
-  const done = today.filter((s) => s.exercise_id === e.id);
-  const s = ex.sets === "—" ? null : suggest(ex, e, sessions);
+for (const ex of slots) {
+  if (!ex.exercise_id) { rows.push({ slotId: ex.id, name: ex.name, core: ex.section === "core", plan: "—", note: ex.note, history: [], done: [], suggestion: null }); continue; }
+  const sessions = await get(`/api/exercises/${ex.exercise_id}/sessions?before=${date}&limit=8`);
+  const reg = regularity(sessions);
+  const done = today.filter((s) => s.exercise_id === ex.exercise_id);
+  const s = ex.sets === "—" ? null : suggest(ex, sessions, reg);
   rows.push({
-    id: e.id, name: ex.name, core: (plan.core ?? []).includes(ex), plan: ex.sets === "—" ? "—" : `${ex.sets}×${ex.reps} · ${ex.rest}`,
+    id: ex.exercise_id, slotId: ex.id, name: ex.name, core: ex.section === "core",
+    plan: ex.sets === "—" ? "—" : `${ex.sets}×${ex.reps} · ${ex.rest}`,
+    regularity: reg,
     history: sessions.slice(0, 3).map((x) => `${x.performed_on}: ${x.sets.map(fmtSet).join(" ")}`),
     e1rm: sessions.slice(0, 4).map((x) => Number(bestE1rm(x).toFixed(1))),
     done: done.map(fmtSet), suggestion: s,
   });
 }
 
-let saved = 0;
+let saved = 0, replanned = 0;
 if (save) {
   for (const r of rows) {
     if (!r.suggestion) continue;
     await call("PUT", `/api/exercises/${r.id}/target`, { load_kg: r.suggestion.load, reps: r.suggestion.reps, reason: r.suggestion.why, set_by: "hoy", set_on: date });
     saved++;
+    const patch = {};
+    if (r.suggestion.planReps) patch.reps = r.suggestion.planReps;
+    if (r.suggestion.planSets) patch.sets = r.suggestion.planSets;
+    if (Object.keys(patch).length) { await call("PATCH", `/api/plan/exercises/${r.slotId}`, patch); replanned++; }
   }
 }
 
-const out = { date, weekday, plan: { day: plan.day, label: plan.label, type: plan.type, focus: plan.focus, tip: plan.tip ?? null, semana: plan.day === "Viernes" ? semana : null }, setsToday: today.length, exercises: rows, targetsSaved: saved };
+const out = {
+  date, weekday,
+  plan: { key: plan.key, day: plan.day, label: plan.label, type: plan.type, focus: plan.focus, tip: plan.tip ?? null, post_key: plan.post_key, semana: plan.key === "viernes" ? semana : null },
+  setsToday: today.length, exercises: rows, targetsSaved: saved, planUpdated: replanned,
+};
 if (json) { console.log(JSON.stringify(out, null, 2)); process.exit(0); }
 
 console.log(`${date} (${weekday}) — ${plan.day}: ${plan.label}${out.plan.semana ? ` · Semana ${out.plan.semana}` : ""}`);
 console.log(`${plan.focus}${plan.tip ? `\n${plan.tip}` : ""}`);
 if (plan.type === "rest") { console.log("Descanso. Nada que registrar."); process.exit(0); }
-console.log(`Series registradas hoy: ${today.length}${save ? ` · objetivos guardados: ${saved}` : ""}\n`);
+console.log(`Series registradas hoy: ${today.length}${save ? ` · objetivos guardados: ${saved} · plan reescrito: ${replanned}` : ""}\n`);
 for (const r of rows) {
-  console.log(`${r.core ? "[core] " : ""}${r.name}  (${r.plan})${r.id ? `  id=${r.id}` : ""}`);
-  if (r.note) console.log(`   ! ${r.note}`);
+  console.log(`${r.core ? "[core] " : ""}${r.name}  (${r.plan})${r.id ? `  id=${r.id} slot=${r.slotId}` : ""}`);
+  if (!r.id) { console.log(`   ! sin ejercicio del catalogo — no se registra`); continue; }
+  if (r.regularity?.gap != null) console.log(`   regularidad: ultima hace ${r.regularity.gap} d · ${r.regularity.inLast28} sesiones en 28 d${r.regularity.avgGap ? ` · cada ~${r.regularity.avgGap} d` : ""}`);
   for (const h of r.history ?? []) console.log(`   ${h}`);
-  if (r.e1rm?.length > 1) console.log(`   e1RM: ${r.e1rm.join(" ← ")}`);
+  if (r.e1rm?.length > 1 && r.e1rm.some((v) => v > 0)) console.log(`   e1RM: ${r.e1rm.join(" ← ")}`);
   if (r.done.length) console.log(`   hoy:    ${r.done.join(" ")}`);
-  if (r.suggestion) console.log(`   → ${r.suggestion.load != null ? `${r.suggestion.load} kg × ` : ""}${r.suggestion.reps}   (${r.suggestion.why})`);
+  if (r.suggestion) {
+    console.log(`   → ${r.suggestion.load != null ? `${r.suggestion.load} kg × ` : ""}${r.suggestion.reps}   (${r.suggestion.why})`);
+    if (r.suggestion.planSets) console.log(`   plan:   series ${r.plan.split("×")[0]} → ${r.suggestion.planSets}${save ? "" : "  (usa --guardar para escribirlo)"}`);
+    if (r.suggestion.planReps) console.log(`   plan:   reps → ${r.suggestion.planReps}${save ? "" : "  (usa --guardar para escribirlo)"}`);
+  }
 }

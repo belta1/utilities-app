@@ -6,7 +6,6 @@
 //   semana 2026-09-14      last 7 days ending that date
 //   semana --days 14
 //   semana --json
-import { loadModuleFile } from "/app/jsx.mjs";
 
 const API = process.env.API_URL ?? "http://localhost:3000";
 const args = process.argv.slice(2);
@@ -20,7 +19,8 @@ const start = shift(end, -(N - 1));
 const pStart = shift(start, -N), pEnd = shift(start, -1);
 
 const get = async (p) => { const r = await fetch(API + p); if (!r.ok) throw new Error(`${p}: ${r.status}`); return r.json(); };
-const { days } = await loadModuleFile(`${process.env.PAGES_DIR ?? "/app/pages"}/_lib/recomp/data.jsx`);
+// The plan lives in the database; /api/plan is the same list the dashboard renders.
+const days = await get("/api/plan");
 const catalog = await get("/api/exercises");
 const byId = Object.fromEntries(catalog.map((e) => [e.id, e]));
 const cur = await get(`/api/sets?from=${start}&to=${end}`);
@@ -48,7 +48,7 @@ const C = summarize(cur), P = summarize(prev);
 // Plan adherence: which strength/cardio/recovery days of the week had a session.
 const weekdayOf = (iso) => ["Domingo", "Lunes", "Martes", "Miercoles", "Jueves", "Viernes", "Sabado"][new Date(iso + "T12:00:00").getDay()];
 const trained = new Set(C.days.map(weekdayOf));
-const planned = days.filter((d) => d.type !== "rest" && !d.optional).map((d) => d.day);
+const planned = days.filter((d) => d.type !== "rest" && !d.is_optional).map((d) => d.day);
 const missed = N === 7 ? planned.filter((d) => !trained.has(d)) : [];
 
 const fmt = (s) => (s.duration_s ? `${s.duration_s}s` : `${s.load_kg}kg×${s.reps}`);

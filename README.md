@@ -52,7 +52,7 @@ docker exec pg psql -U postgres -c "CREATE DATABASE recomp"                     
 PGHOST=localhost PGPORT=5433 PGDATABASE=recomp PGUSER=postgres PGPASSWORD=pg npm start
 ```
 
-Open <http://localhost:3000> — the index lists every page; `/recomp_v3` is the dashboard.
+Open <http://localhost:3000> — `/` is the dashboard (`/recomp_v3`, set by `HOME_PAGE`).
 On first start the server creates its tables and seeds the exercise catalog:
 
 ```
@@ -214,6 +214,7 @@ All settings are environment variables. Locally they come from `.env` (see
 | `PGSSLMODE` | `no-verify` (compose) / unset (`npm start`) | server | `no-verify` = TLS, self-signed cert accepted; `require`/`verify-full` = TLS with certificate check; `disable` = plain TCP |
 | `PORT` | `3000` | server + compose | Listen port; in compose, the host port that maps to the container |
 | `PAGES_DIR` | `pages` (`/pages` in Docker) | server | Folder the server reads pages from |
+| `HOME_PAGE` | `recomp_v3` | server | Page served at `/` |
 | `PAGES_PATH` | `/home/belta1/docker_compose/config/jsx_server` | compose | Host folder bind-mounted at `/pages` |
 | `NODE_ENV` | `development` (`production` in Docker) | server | Production = minified browser bundle, React production build |
 | `IMAGE` | `ghcr.io/belta1/exercise-app:latest` | compose | Image both services run; `docker compose up --build` builds it locally under this name instead |
@@ -227,7 +228,7 @@ All settings are environment variables. Locally they come from `.env` (see
 ## 4. Pages
 
 Every `pages/<name>.jsx` is served at `GET /<name>`. Nested folders map to nested paths
-(`pages/blog/post.jsx` → `/blog/post`). `GET /` lists them all.
+(`pages/blog/post.jsx` → `/blog/post`). `GET /` serves `HOME_PAGE` (default `recomp_v3`).
 
 **Live reload without a restart.** Files are re-read on every request; compiled output is
 cached and invalidated whenever any file under the pages folder changes.
@@ -356,7 +357,7 @@ What to lift next time, one row per exercise, shown on the training tab's cards 
 
 | Method | Path | Notes |
 |---|---|---|
-| `GET` | `/` | Index of pages |
+| `GET` | `/` | The home page (`HOME_PAGE`, default `recomp_v3`) |
 | `GET` | `/<name>` | Render a page; `/<name>.js` is its browser bundle |
 | `POST` | `/render` | Render JSX from the request body (raw JSX, or JSON `{ jsx, props? }`). Returns bare HTML, no hydration. |
 | `GET` | `/health` | `ok` |

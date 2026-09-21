@@ -13,7 +13,7 @@ database engine: connect, create databases and roles, hba, backups, plus a SQL r
 ## Layout
 
 ```
-server.mjs      http server: page routing, SSR + hydration bundle, "/" index, /render
+server.mjs      http server: page routing, SSR + hydration bundle, "/" = HOME_PAGE, /render
 jsx.mjs         esbuild wrappers: expression pages, module pages, browser bundle
 api.mjs         /api/* router + handlers (exercises, sets); validation helpers
 db.mjs          pg pool, SCHEMA (CREATE TABLE IF NOT EXISTS), idempotent seed()
@@ -60,8 +60,8 @@ Tokens in `pages/_lib/recomp/tokens.jsx`: `T.bg #14110F`, `T.surface`, `T.raised
 (recovery / ok), `T.gold` (highlight), `T.lilac`; text `T.bone` / `T.ash` / `T.faint`.
 Fonts: Space Grotesk (titles, values, buttons) + JetBrains Mono (labels, meta). Cards:
 `background: T.surface`, `1px solid T.line`, radius 12–14, a 3px accent left border on
-the "current" card, `.fadein` on tab switch. The server's `/` index reproduces this in
-plain CSS (`indexPage()` in `server.mjs`) — keep the two in sync if tokens change.
+the "current" card, `.fadein` on tab switch. `/` serves `recomp_v3` directly (`HOME_PAGE`
+in `server.mjs`); there is no index listing.
 
 ## Adding data / API
 

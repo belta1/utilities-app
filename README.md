@@ -93,18 +93,7 @@ docker exec postgres psql -U belta1 -c "CREATE DATABASE recomp"
 
 A different role or database name works too — set `PGUSER` / `PGDATABASE`.
 
-**2. Pages folder.** Copy the `pages/` directory to the host path that the compose file
-mounts. The `_lib/` subfolder is required — `recomp_v3.jsx` imports from it.
-
-```sh
-mkdir -p /home/belta1/docker_compose/config/jsx_server
-# from your workstation:
-scp -r pages/* belta1@server:/home/belta1/docker_compose/config/jsx_server/
-```
-
-A different path works too — set `PAGES_PATH` (see [Configuration](#3-configuration)).
-
-**3. Push the repository to GitHub** (only for the Portainer options):
+**2. Push the repository to GitHub** (only for the Portainer options):
 
 ```sh
 git add -A
@@ -148,7 +137,6 @@ standalone environments and Swarm alike; nothing is built on the server.
    | `PGUSER` | *(optional)* Postgres role, default `belta1` |
    | `PGDATABASE` | *(optional)* database name, default `recomp` |
    | `PGSSLMODE` | *(optional)* `no-verify` (default, TLS), `require`, or `disable` if Postgres has no TLS |
-   | `PAGES_PATH` | *(optional)* host folder with the pages, default `/home/belta1/docker_compose/config/jsx_server` |
    | `PORT` | *(optional)* host port, default `3000` |
 
 7. *(Optional)* **GitOps updates** → enable **Polling** (e.g. every 5 minutes) so a
@@ -158,7 +146,7 @@ standalone environments and Swarm alike; nothing is built on the server.
 
    ```
    db ready: 83 images, 81 new exercises
-   jsx-render listening on http://localhost:3000  (pages: /pages)
+   jsx-render listening on http://localhost:3000  (pages: /app/pages)
    ```
 
 9. Open `http://<server>:3000/recomp_v3`.
@@ -191,11 +179,27 @@ docker compose logs -f jsx_server
 
 ### Updating
 
+**Everything in the repository ships together.** Pages, server code, seed data, figures,
+the coach's manual, skills and tools are all in the image, so there is one update path
+and no way for the page and the API it calls to drift apart:
+
 | What changed | What to do |
 |---|---|
-| A page (`pages/*.jsx`) | Copy it to the host folder. No restart — the next request recompiles. |
-| Server code, seed data, figures | Redeploy the stack (Portainer: *Pull and redeploy* / GitOps; compose: `up -d --build`). Startup re-runs the seed. |
+| Anything in the repo — a page, server code, seed data, figures, the coach | `git push` → wait for the Actions build → Portainer: **Pull and redeploy** (*Re-pull image* on), or GitOps polling; with compose on the host: `docker compose up -d --build`. Startup re-runs the seed. |
+| The plan, targets, measurements | Nothing to deploy — they are rows. The coach writes them through the API and the dashboard shows them on the next page load. |
 | Exercise names or groups | Edit rows in the `exercises` table; the seed does not overwrite them. |
+
+While you are working on a page, `npm start` on your own machine serves `./pages`
+directly and recompiles on the next request, so you don't redeploy to see an edit.
+
+> **Upgrading from a bind-mounted setup.** Earlier versions mounted a host folder over
+> `/pages` and pages were copied there by hand. That mount is gone from
+> `docker-compose.yml`. In Portainer use **Pull and redeploy** (not *Restart*) so the
+> compose file is refreshed from git as well as the image — otherwise the old mount
+> survives and shadows the pages in the image. Afterwards
+> `docker exec jsx_server ls /app/pages` should list your pages and
+> `/home/belta1/docker_compose/config/jsx_server` can be deleted; a `PAGES_PATH` stack
+> variable, if you set one, is now unused.
 
 ---
 
@@ -213,9 +217,8 @@ All settings are environment variables. Locally they come from `.env` (see
 | `PGPASSWORD` | *(required)* | server | Password of `PGUSER` |
 | `PGSSLMODE` | `no-verify` (compose) / unset (`npm start`) | server | `no-verify` = TLS, self-signed cert accepted; `require`/`verify-full` = TLS with certificate check; `disable` = plain TCP |
 | `PORT` | `3000` | server + compose | Listen port; in compose, the host port that maps to the container |
-| `PAGES_DIR` | `pages` (`/pages` in Docker) | server | Folder the server reads pages from |
+| `PAGES_DIR` | `pages` (`/app/pages` in Docker) | server + coach | Folder the server reads pages from |
 | `HOME_PAGE` | `recomp_v3` | server | Page served at `/` |
-| `PAGES_PATH` | `/home/belta1/docker_compose/config/jsx_server` | compose | Host folder bind-mounted at `/pages` |
 | `NODE_ENV` | `development` (`production` in Docker) | server | Production = minified browser bundle, React production build |
 | `IMAGE` | `ghcr.io/belta1/exercise-app:latest` | compose | Image both services run; `docker compose up --build` builds it locally under this name instead |
 | `COACH_PGPASSWORD` | *(required)* | compose (coach) | Password of the read-only `coach_ro` role |
@@ -575,7 +578,7 @@ writes only to its own `coach_data` volume and, through the API, to the workout 
 ```
 phone / claude.ai/code ──Remote Control──▶ coach container ──▶ http://jsx_server:3000/api/*
                                                              ──▶ postgres (role coach_ro, SELECT only)
-                                                             ──▶ /pages (nutrition content, read-only)
+                                                             ──▶ /app/pages (nutrition content, read-only)
 ```
 
 What's inside: [`coach/README.md`](coach/README.md). The manual it follows:
@@ -730,12 +733,16 @@ variables doesn't match the role's password. Reset it:
 **`database "recomp" does not exist`** — create it (see Prerequisites) or point
 `PGDATABASE` at an existing one.
 
-**`no page recomp_v3.jsx`** — the pages folder on the host is empty or mounted from the
-wrong path. `docker exec jsx_server ls /pages` should list `_lib recomp_v3.jsx …`.
-Check `PAGES_PATH`.
+**`no page recomp_v3.jsx`** — the container is not running the image you think it is.
+`docker exec jsx_server ls /app/pages` should list `_lib recomp_v3.jsx …`. If the stack
+still bind-mounts a host folder over `/pages` from an older `docker-compose.yml`, pull
+the latest repo revision in Portainer so the compose file itself is refreshed.
 
-**500 with `Could not resolve "./_lib/recomp/tokens.jsx"`** — `_lib/` wasn't copied to
-the pages folder.
+**The page ignores a change you deployed** — a stale image, or a leftover bind mount
+shadowing `/app/pages`. Compare what the browser gets with the repo:
+`curl -s http://<server>:3000/recomp_v3.js | grep -c api/plan` must be ≥ 1 on any build
+that reads the plan from the database. `docker inspect jsx_server --format '{{.Image}}'`
+and `docker exec jsx_server cat /app/pages/recomp_v3.jsx | head -3` settle it.
 
 **Buttons do nothing** — the page is an expression page (no `export`), which is static by
 design. Convert it to a module page with `export default`.

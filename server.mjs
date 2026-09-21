@@ -112,8 +112,11 @@ const TEXT = "text/plain; charset=utf-8";
 const JS = "text/javascript; charset=utf-8";
 
 const server = createServer(async (req, res) => {
-  const url = new URL(req.url, "http://localhost");
   try {
+    // Inside the try: `new URL` throws on a request target the parser accepts but
+    // the URL spec does not ("//", "http:"), and an unhandled throw here kills the
+    // whole process, not just the request.
+    const url = new URL(req.url, "http://localhost");
     if (await handleApi(req, res, url, readBody)) return;
 
     if (req.method === "GET" && url.pathname === "/health") {
@@ -154,7 +157,9 @@ const server = createServer(async (req, res) => {
 
     send(res, 404, "not found", TEXT);
   } catch (err) {
-    send(res, err.status ?? 500, err.message, TEXT);
+    const status = err.status ?? (err.code === "ERR_INVALID_URL" ? 400 : 500);
+    if (status === 500) console.error(err);
+    send(res, status, err.message, TEXT);
   }
 });
 

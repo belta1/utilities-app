@@ -57,7 +57,7 @@ newest mtime under `pages/`, so any edit is live on the next request — no rest
   for them. Shared values go in `pages/_lib/<app>/tokens.jsx`.
 - **Imports:** relative files under `pages/`, and packages from the server's
   `node_modules` (`react`, `react-dom`; add others to `package.json`). Pages cannot
-  import `seed/`, `api.mjs` or `db.mjs` — in Docker, `/pages` is a separate mount.
+  import `seed/`, `api.mjs` or `db.mjs` — pages are a leaf of the tree, not a caller.
 - **Small, stable bundle.** Everything a page imports ships to the browser. Keep heavy
   data in the API, not in `_lib`.
 - **Copy is Spanish, written without accents** (e.g. `musculo`, `ultima`, `Nutricion`),
@@ -127,16 +127,16 @@ there is no test suite to run.
 
 ## Deploying (jfubuntu)
 
-Two independent halves — deploying one does not deploy the other:
+One path for everything in the repo — `pages/` included (they are `COPY`d into the image
+at `/app/pages`, there is no bind mount): push to `main` → GitHub Actions builds
+`ghcr.io/belta1/exercise-app:latest` (package is public) → Portainer, stack
+`utilities-app`: **Pull and redeploy** with *Re-pull image* on. Wait for the Actions run
+before pulling, or you redeploy the previous image. Use **Pull and redeploy** rather than
+a plain restart when `docker-compose.yml` itself changed, since that also refreshes the
+compose file from git.
 
-1. **Pages** are bind-mounted from the host folder
-   `/home/belta1/docker_compose/config/jsx_server/` (`PAGES_PATH`). Copy the changed
-   page **and `_lib/`** there (`scp -r pages/_lib pages/<name>.jsx belta1@jfubuntu:…`).
-   Live on the next request.
-2. **Server code** (`server.mjs`, `api.mjs`, `db.mjs`, `seed/`, `scripts/`, `coach/`) ships in the Docker
-   image: push to `main` → GitHub Actions builds `ghcr.io/belta1/exercise-app:latest`
-   (package is public) → Portainer, stack `utilities-app`: **Pull and redeploy**. Wait
-   for the Actions run before pulling, or you redeploy the previous image.
+The plan, targets and measurements are rows, not code: the coach writes them through the
+API and they show on the next page load. Nothing to deploy for those.
 
 The running stack: containers `jsx_server` on `:3000` and `coach` (the Claude Code coaching agent,
 Remote Control server mode, same image; README → Coach), Postgres container `postgres` on
@@ -150,7 +150,7 @@ repo. If a redeploy fails, read Portainer's own log first:
 A second service from the same image: Claude Code in Remote Control server mode, run as
 `node`, with its own manual (`coach/CLAUDE.md`), skills and tools (`coach/bin`). It only
 writes to `/coach/data` (volume) and to the log through the API; its DB role `coach_ro` is
-SELECT-only. Its plan data comes from the live `/pages` mount, not the image. Personal
+SELECT-only. Its plan comes from the API; the nutrition content from `/app/pages`. Personal
 files (profile, imported conversations, phone notes) never enter the repo — `coach/data/`
 is gitignored. When changing the API, keep `coach/CLAUDE.md`'s tool table and
 `coach/bin/*.mjs` in step.

@@ -14,7 +14,7 @@ Sources of truth, in this order:
    exactly that, so **anything you write here is live on his next page load**. Read it
    with `plan`, change it with `plan cambiar` / `plan fijar` / `hoy --guardar`. The
    written content that is not a number — weekly menu, macros, supplements and
-   `POST_WORKOUT` — still lives in `/pages/_lib/recomp/data.jsx` (read-only mount).
+   `POST_WORKOUT` — still lives in `/app/pages/_lib/recomp/data.jsx`, part of the image.
 3. **`data/PROFILE.md`** — who he is, goals, injuries, preferences. Update it when he tells you
    something durable (a new measurement, a pain, a schedule change).
 4. **`data/history/`** — earlier coaching conversations he saved (from claude.ai). Read
@@ -93,8 +93,8 @@ dumbbells; volume = load × reps, timed sets add none.
   conversations, plus `coach-notes.md` where you append decisions made together —
   date, decision, why — so the next session remembers), `notas/` (raw phone logs he
   pastes for `importar`).
-- `/app` — the app's code and scripts (image, read-only). `/pages` — the live pages
-  folder with the nutrition content (read-only mount); the plan itself is in the DB.
+- `/app` — the app's code, scripts and pages (image, read-only). `/app/pages` holds the
+  nutrition content the dashboard renders; the plan itself is in the DB, not there.
 
 Improvements to the app are made on his PC and deployed. If you find a bug, write it to
 `data/history/coach-notes.md` under "App".

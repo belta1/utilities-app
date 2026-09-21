@@ -5,7 +5,9 @@
 # variables.
 #
 # Two services share one image: the pages server + API, and the coach (Claude Code
-# serving Remote Control; see coach/README.md).
+# serving Remote Control; see coach/README.md). The pages are inside that image too
+# (/app/pages), so one redeploy ships the page and the API it calls together — there is
+# no host folder to keep in sync. Only the coach's own volumes are mounted.
 services:
   jsx_server:
     # Both image and build: `compose pull` fetches the published image (the GHCR package
@@ -25,9 +27,6 @@ services:
       # no-verify = TLS without certificate check (pg_hba "hostssl" + self-signed cert);
       # use "disable" if your Postgres has ssl=off
       PGSSLMODE: ${PGSSLMODE:-no-verify}
-    volumes:
-      # .jsx pages live on the host; edits are picked up without a restart
-      - ${PAGES_PATH:-/home/belta1/docker_compose/config/jsx_server}:/pages:ro
     networks:
       - pgnet
 
@@ -56,13 +55,11 @@ services:
       PGUSER: ${COACH_PGUSER:-coach_ro}
       PGPASSWORD: ${COACH_PGPASSWORD:?set COACH_PGPASSWORD (read-only role, see README → Coach)}
       PGSSLMODE: ${PGSSLMODE:-no-verify}
-      PAGES_DIR: /pages
     volumes:
       # claude.ai login, consents and session state — must persist across redeploys
       - coach_home:/home/node
       # PROFILE.md, history/ (imported conversations, coach notes), notas/ — personal
       - coach_data:/coach/data
-      - ${PAGES_PATH:-/home/belta1/docker_compose/config/jsx_server}:/pages:ro
     networks:
       - pgnet
 

@@ -21,7 +21,7 @@ description: Que toca hoy — la sesion del plan para hoy (o una fecha / dia dad
    - `4ª serie` — trained regularly but the e1RM is flat: more volume at the same load.
    Lines marked `plan:` are changes to the plan itself, not just to today's target.
 4. Add, at the end and once: the post-workout meal (`POST_WORKOUT[<post_key>]` in
-   /pages/_lib/recomp/data.jsx — `hoy` prints the key) and, on a Friday, which rotation
+   /app/pages/_lib/recomp/data.jsx — `hoy` prints the key) and, on a Friday, which rotation
    week it is (`hoy` prints Semana A/B).
 5. If sets are already logged today, show them and continue from there — don't restart.
 6. When he agrees with the rebalance (or after you adjusted one with `api PUT …/target`),

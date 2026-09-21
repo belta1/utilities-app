@@ -76,53 +76,6 @@ const SCHEMA = `
     set_on        date NOT NULL DEFAULT current_date,
     updated_at    timestamptz NOT NULL DEFAULT now()
   );
-
-  -- Splitter (receipt-splitting agent, github.com/belta1/splitter-agent) shares these tables:
-  -- the agent's bin/db.mjs carries the same DDL; both create-if-missing. Page: /splitter.
-  CREATE TABLE IF NOT EXISTS splitter_people (
-    id          serial PRIMARY KEY,
-    name        text NOT NULL UNIQUE,
-    aliases     text[] NOT NULL DEFAULT '{}',
-    email       text,
-    created_at  timestamptz NOT NULL DEFAULT now()
-  );
-  CREATE TABLE IF NOT EXISTS splitter_checks (
-    id          text PRIMARY KEY,
-    restaurant  text,
-    check_date  date,
-    currency    text NOT NULL DEFAULT 'CLP',
-    subtotal    numeric NOT NULL,
-    discount    numeric NOT NULL DEFAULT 0,
-    tip         numeric NOT NULL DEFAULT 0,
-    total       numeric NOT NULL,
-    paid_by     text,
-    result      jsonb NOT NULL,
-    xlsx_path   text,
-    emailed_to  text[] NOT NULL DEFAULT '{}',
-    created_at  timestamptz NOT NULL DEFAULT now()
-  );
-  CREATE TABLE IF NOT EXISTS splitter_check_shares (
-    check_id    text NOT NULL REFERENCES splitter_checks(id) ON DELETE CASCADE,
-    person_id   int REFERENCES splitter_people(id),
-    person_name text NOT NULL,
-    subtotal    numeric NOT NULL,
-    discount    numeric NOT NULL DEFAULT 0,
-    tip         numeric NOT NULL DEFAULT 0,
-    total       numeric NOT NULL,
-    owes        numeric NOT NULL DEFAULT 0,
-    settled_at  timestamptz,
-    PRIMARY KEY (check_id, person_name)
-  );
-  CREATE INDEX IF NOT EXISTS splitter_check_shares_person_idx ON splitter_check_shares (person_id);
-  CREATE TABLE IF NOT EXISTS splitter_settings (
-    key         text PRIMARY KEY,
-    value       jsonb NOT NULL,
-    updated_at  timestamptz NOT NULL DEFAULT now()
-  );
-  INSERT INTO splitter_settings (key, value) VALUES
-    ('default_payer', '"Jose"'),
-    ('recipients', '{"to": ["joseeefcof@gmail.com"], "cc": []}')
-  ON CONFLICT (key) DO NOTHING;
 `;
 
 // The database itself (PGDATABASE) must already exist; only the tables are managed here.

@@ -6,7 +6,7 @@
 // on the telemetry tab. Swapping an exercise or rebalancing a target is therefore a
 // write to the DB — no deploy, no page edit. Only the written content (weekly menu,
 // macros, supplements, post-workout meals) still lives in ./_lib/recomp/data.jsx.
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { T, J } from "./_lib/recomp/tokens.jsx";
 import { POST_WORKOUT } from "./_lib/recomp/data.jsx";
 import { DashboardTab, NutritionTab } from "./_lib/recomp/ui.jsx";
@@ -128,12 +128,12 @@ function useTargets(dep) {
 }
 
 const TargetLine = ({ target, accent }) => (
-  <div title={target.reason ?? ""} style={{ display: "flex", alignItems: "baseline", gap: 6, marginTop: 7, padding: "5px 9px", background: accent + "12", border: `1px solid ${accent}33`, borderRadius: 7 }}>
+  <div style={{ display: "flex", flexWrap: "wrap", alignItems: "baseline", columnGap: 6, rowGap: 2, minWidth: 0, maxWidth: "100%", marginTop: 7, padding: "5px 9px", background: accent + "12", border: `1px solid ${accent}33`, borderRadius: 7 }}>
     <span style={{ fontSize: 7, color: accent, letterSpacing: 1.5, fontFamily: MONO, flexShrink: 0 }}>OBJETIVO</span>
-    <span style={{ fontSize: 12, fontFamily: GROT, fontWeight: 700, color: T.bone, flexShrink: 0 }}>
+    <span style={{ fontSize: 12, fontFamily: GROT, fontWeight: 700, color: T.bone, flexShrink: 0, whiteSpace: "nowrap" }}>
       {target.load_kg != null && <>{target.load_kg}<span style={{ fontSize: 9, color: T.ash }}>kg</span></>}{target.load_kg != null && target.reps && " × "}{target.reps}
     </span>
-    {target.reason && <span style={{ fontSize: 9, color: T.ash, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{target.reason}</span>}
+    {target.reason && <span style={{ flex: "1 1 160px", minWidth: 0, fontSize: 9, color: T.ash, lineHeight: 1.45, whiteSpace: "normal", overflowWrap: "anywhere" }}>{target.reason}</span>}
   </div>
 );
 
@@ -271,6 +271,9 @@ const dayAccent = (type) => type === "strength" ? T.copper : type === "lesmills"
 // for the Les Mills / cycling placeholders, which are shown but never logged.
 const isTimed = (slot) => /seg/i.test(slot.reps ?? "");
 
+// Plan day keys (planKey in db.mjs) by Date.getDay(), for opening on today's session.
+const WEEKDAY_KEYS = ["domingo", "lunes", "martes", "miercoles", "jueves", "viernes", "sabado"];
+
 const TrainingTab = ({ plan, today }) => {
   const [activeDay, setActiveDay] = useState(0);
   const [expandedEx, setExpandedEx] = useState(null);
@@ -278,6 +281,19 @@ const TrainingTab = ({ plan, today }) => {
   const targets = useTargets(log.sets);
   const typeLabel = { strength: "FUERZA", lesmills: "CARDIO", recovery: "BALANCE", core: "CORE", rest: "OFF" };
   const days = plan.days;
+  const dayStrip = useRef(null);
+  const autoPicked = useRef(false);
+
+  // Select today's plan day once, after mount (today is client-only), then bring its
+  // button into view — never again, so a day the user tapped sticks.
+  useEffect(() => {
+    if (autoPicked.current || !today || !days.length) return;
+    autoPicked.current = true;
+    const i = days.findIndex((d) => d.key === WEEKDAY_KEYS[parseDate(today).getDay()]);
+    if (i < 0) return;
+    setActiveDay(i);
+    requestAnimationFrame(() => dayStrip.current?.children[i]?.scrollIntoView({ inline: "center", block: "nearest" }));
+  }, [today, days]);
   const sel = days[activeDay];
   const accent = dayAccent(sel?.type);
   const setsFor = (slot) => (slot.exercise_id ? log.sets.filter((s) => s.exercise_id === slot.exercise_id) : []);
@@ -299,7 +315,7 @@ const TrainingTab = ({ plan, today }) => {
       </div>
 
       <div style={{ padding: "14px 14px 0" }}>
-        <div style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 4, marginBottom: 14 }}>
+        <div ref={dayStrip} style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 4, marginBottom: 14 }}>
           {days.map((d, i) => {
             const ac = dayAccent(d.type);
             const on = activeDay === i;
@@ -782,7 +798,7 @@ const LogTab = ({ exercises, plan, today }) => {
 // ROOT
 // ═══════════════════════════════════════════════════════════════
 export default function PlanRecomp() {
-  const [tab, setTab] = useState("dash");
+  const [tab, setTab] = useState("entreno");
   const [today, setToday] = useState(null);
   const exercises = useExercises();
   const plan = usePlan();

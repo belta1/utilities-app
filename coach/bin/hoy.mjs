@@ -7,8 +7,18 @@
 //   hoy 2026-09-22            another date
 //   hoy --day martes          force a plan day (lunes|martes|miercoles|jueves|viernes|sabado|core|domingo)
 //   hoy --guardar             write the rebalance back: targets always, and the plan's
-//                             own sets / reps / seconds when a rule changed them
+//                             own sets / reps / seconds when a rule changed them; also the
+//                             day's recommendation (see below)
+//   hoy --limpiar             drop today's saved recommendation (dashboard reverts to the plan day)
 //   hoy --json                machine-readable
+//
+// Weekly coverage / substitution: before the per-exercise rebalance, hoy tallies which
+// movement patterns (empuje / halar / pierna) and cardio the week owed by today vs what was
+// actually trained. If today's calendar day is light (recovery / rest / cardio / optional
+// core) and the week is short, it substitutes the plan day that best fills the gap — strength
+// deficits beat cardio on a tie — and rebalances THAT day's exercises instead. The weekly
+// plan (plan_days, keyed by weekday) is never edited; the substitution is a date-scoped row
+// in daily_recommendation that the dashboard renders as "HOY SUGERIDO". --guardar writes it.
 //
 // The rebalance answers two questions per exercise: how hard (load) and how much
 // (reps or seconds, and how many sets). Regularity comes first, because a load that was
@@ -39,6 +49,7 @@ const API = process.env.API_URL ?? "http://localhost:3000";
 const args = process.argv.slice(2);
 const json = args.includes("--json");
 const save = args.includes("--guardar");
+const clear = args.includes("--limpiar");
 const dayArg = args.includes("--day") ? args[args.indexOf("--day") + 1] : null;
 const dateArg = args.find((a) => /^\d{4}-\d{2}-\d{2}$/.test(a));
 
@@ -56,16 +67,24 @@ const call = async (method, p, body) => {
 };
 const get = (p) => call("GET", p);
 
+// --limpiar: remove today's recommendation and stop, so the dashboard falls back to the plan.
+if (clear) {
+  try { await call("DELETE", `/api/recommendation/${date}`); console.log(`${date}: recomendacion eliminada — el dashboard vuelve al dia del plan.`); }
+  catch { console.log(`${date}: no habia recomendacion que eliminar.`); }
+  process.exit(0);
+}
+
 const weekday = ["domingo", "lunes", "martes", "miercoles", "jueves", "viernes", "sabado"][dow];
 const key = fold(dayArg ?? weekday).replace(/\+/g, "").trim();
-let plan;
+let calendarPlan;
 try {
-  plan = await get(`/api/plan/${encodeURIComponent(key)}`);
+  calendarPlan = await get(`/api/plan/${encodeURIComponent(key)}`);
 } catch (err) {
   const all = await get("/api/plan").catch(() => []);
   console.error(`no plan day "${key}"; use ${all.map((d) => d.key).join("|") || "lunes|martes|miercoles|jueves|viernes|sabado|core|domingo"}`);
   process.exit(2);
 }
+let plan = calendarPlan;                              // may become the substituted day below
 
 // Friday alternates: even ISO week = Semana A (empuje), odd = Semana B (halar).
 const isoWeek = (d) => { const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate())); const day = t.getUTCDay() || 7; t.setUTCDate(t.getUTCDate() + 4 - day); const y0 = new Date(Date.UTC(t.getUTCFullYear(), 0, 1)); return Math.ceil(((t - y0) / 864e5 + 1) / 7); };
@@ -73,6 +92,71 @@ const semana = isoWeek(new Date(date + "T12:00:00")) % 2 === 0 ? "A" : "B";
 const inRotation = (ex) => !/^Semana [AB]/.test(ex.note ?? "") || ex.note.startsWith(`Semana ${semana}`);
 
 const today = await get(`/api/sets?date=${date}`);
+
+// ── weekly coverage: what the week still owes, so a light day can be repurposed ────
+// Same pattern map as semana.mjs. Expected = the non-optional plan days due Mon→today,
+// each classified by its dominant lift (a cardio day counts as "cardio"); actual = the
+// sessions actually logged this week, classified the same way. The gap drives the swap.
+const PATTERN = { Pecho: "empuje", Hombros: "empuje", Triceps: "empuje", Espalda: "halar", Biceps: "halar", Trapecio: "halar", Piernas: "pierna", Gluteos: "pierna", Isquios: "pierna", Gemelos: "pierna", "Cadena posterior": "pierna", Core: "core" };
+const patternOf = (e) => (/face pull|pajaros|remo|encogimiento/i.test(e?.name ?? "") ? "halar" : PATTERN[e?.muscle_group] ?? "otros");
+const dominant = (ps) => { const c = {}; for (const p of ps) if (p && p !== "core" && p !== "otros") c[p] = (c[p] ?? 0) + 1; let best = null, n = 0; for (const [p, v] of Object.entries(c)) if (v > n) { best = p; n = v; } return best; };
+const WK = { domingo: 0, lunes: 1, martes: 2, miercoles: 3, jueves: 4, viernes: 5, sabado: 6 };
+const CANONICAL = { empuje: "lunes", halar: "martes", pierna: "miercoles", cardio: "jueves" };
+const shiftIso = (iso, n) => { const [y, m, d] = iso.split("-").map(Number); return localDate(new Date(y, m - 1, d + n)); };
+const weekPos = (i) => (i + 6) % 7;                          // Monday = 0 … Sunday = 6
+const todayPos = weekPos(dow);
+const weekStart = shiftIso(date, -todayPos);
+
+const allDays = await get("/api/plan").catch(() => []);
+const catalog = await get("/api/exercises").catch(() => []);
+const byId = Object.fromEntries(catalog.map((e) => [e.id, e]));
+const weekSets = await get(`/api/sets?from=${weekStart}&to=${date}`).catch(() => []);
+
+// dominant pattern of a plan day: strength → its main lifts (Friday honours the rotation);
+// cardio day → "cardio"; recovery / core / rest → none.
+const dayPattern = (d) => (d.type === "lesmills" ? "cardio" : d.type === "strength"
+  ? dominant((d.exercises ?? []).filter((x) => x.section !== "core" && inRotation(x)).map(patternOf)) : null);
+
+const expected = {}, actual = {};
+for (const d of allDays) {
+  if (d.is_optional || d.type === "rest") continue;
+  const idx = WK[d.key];
+  if (idx == null || weekPos(idx) > todayPos) continue;      // not due yet this week
+  const p = dayPattern(d);
+  if (p) expected[p] = (expected[p] ?? 0) + 1;
+}
+const byDate = {};
+for (const s of weekSets) (byDate[s.performed_on] ??= []).push(s);
+for (const sets of Object.values(byDate)) {
+  const p = dominant(sets.map((s) => patternOf(byId[s.exercise_id] ?? {})));
+  if (p) actual[p] = (actual[p] ?? 0) + 1;
+}
+const coverage = ["empuje", "halar", "pierna", "cardio"]
+  .filter((p) => expected[p])
+  .map((p) => ({ pattern: p, expected: expected[p], actual: actual[p] ?? 0, deficit: Math.max(0, expected[p] - (actual[p] ?? 0)) }));
+
+// A calendar day is "light" when it is not a full strength day — those are the days worth
+// repurposing. What is already logged today counts as covered, so we never double it up.
+const light = ["recovery", "rest", "lesmills"].includes(calendarPlan.type) || (calendarPlan.type === "core" && calendarPlan.is_optional);
+const doneToday = dominant(today.map((s) => patternOf(byId[s.exercise_id] ?? {})));
+
+let recommendation = null;
+if (light) {
+  const strengthGap = coverage.filter((c) => c.deficit > 0 && c.pattern !== "cardio").sort((a, b) => b.deficit - a.deficit)[0];
+  const cardioGap = coverage.find((c) => c.pattern === "cardio" && c.deficit > 0);
+  const pick = strengthGap ?? cardioGap;                     // strength beats cardio on a tie
+  const recKey = pick && CANONICAL[pick.pattern];
+  const recDay = recKey && allDays.find((d) => d.key === recKey);
+  if (pick && recDay && recKey !== calendarPlan.key && pick.pattern !== doneToday) {
+    plan = await get(`/api/plan/${recKey}`);
+    const others = coverage.filter((c) => c.deficit > 0 && c.pattern !== pick.pattern).map((c) => c.pattern);
+    recommendation = {
+      plan_key: recKey, source_key: calendarPlan.key, kind: "substitution",
+      title: `${plan.label} (sustituto)`,
+      reason: `Falto ${pick.pattern} esta semana (${pick.actual}/${pick.expected})${others.length ? ` y ${others.join(", ")}` : ""}; hoy toca ${calendarPlan.label} -> sustituyo por ${plan.label}.`,
+    };
+  }
+}
 
 const range = (reps) => { const m = /(\d+)\s*[–-]\s*(\d+)/.exec(reps ?? "") ?? /(\d+)/.exec(reps ?? ""); return m ? { lo: Number(m[1]), hi: Number(m[2] ?? m[1]) } : null; };
 const timed = (ex) => /seg/i.test(ex.reps ?? "");
@@ -221,7 +305,7 @@ for (const ex of slots) {
   });
 }
 
-let saved = 0, replanned = 0;
+let saved = 0, replanned = 0, recSaved = false;
 if (save) {
   for (const r of rows) {
     if (!r.suggestion) continue;
@@ -232,19 +316,30 @@ if (save) {
     if (r.suggestion.planSets) patch.sets = r.suggestion.planSets;
     if (Object.keys(patch).length) { await call("PATCH", `/api/plan/exercises/${r.slotId}`, patch); replanned++; }
   }
+  // Persist (or clear) the day's recommendation so the dashboard's "HOY SUGERIDO" matches.
+  if (recommendation) { await call("PUT", "/api/recommendation", { recommended_on: date, ...recommendation }); recSaved = true; }
+  else { await call("DELETE", `/api/recommendation/${date}`).catch(() => {}); }
 }
 
 const out = {
   date, weekday,
+  calendar: { key: calendarPlan.key, day: calendarPlan.day, label: calendarPlan.label, type: calendarPlan.type },
   plan: { key: plan.key, day: plan.day, label: plan.label, type: plan.type, focus: plan.focus, tip: plan.tip ?? null, post_key: plan.post_key, semana: plan.key === "viernes" ? semana : null },
-  setsToday: today.length, exercises: rows, targetsSaved: saved, planUpdated: replanned,
+  coverage, recommendation,
+  setsToday: today.length, exercises: rows, targetsSaved: saved, planUpdated: replanned, recommendationSaved: recSaved,
 };
 if (json) { console.log(JSON.stringify(out, null, 2)); process.exit(0); }
 
-console.log(`${date} (${weekday}) — ${plan.day}: ${plan.label}${out.plan.semana ? ` · Semana ${out.plan.semana}` : ""}`);
-console.log(`${plan.focus}${plan.tip ? `\n${plan.tip}` : ""}`);
-if (plan.type === "rest") { console.log("Descanso. Nada que registrar."); process.exit(0); }
-console.log(`Series registradas hoy: ${today.length}${save ? ` · objetivos guardados: ${saved} · plan reescrito: ${replanned}` : ""}\n`);
+console.log(`${date} (${weekday}) — ${calendarPlan.day}: ${calendarPlan.label}${out.plan.semana ? ` · Semana ${out.plan.semana}` : ""}`);
+console.log(`${calendarPlan.focus}${calendarPlan.tip ? `\n${calendarPlan.tip}` : ""}`);
+if (coverage.length) console.log(`cobertura semana: ${coverage.map((c) => `${c.pattern} ${c.actual}/${c.expected}${c.deficit ? " ✗" : ""}`).join(" · ")}`);
+if (recommendation) {
+  console.log(`\n⚑ HOY SUGERIDO → ${plan.label}`);
+  console.log(`   ${recommendation.reason}`);
+  console.log(`   (--limpiar para volver a ${calendarPlan.label}${save ? "" : " · --guardar para fijarlo en el dashboard"})`);
+}
+if (plan.type === "rest") { console.log("\nDescanso. Nada que registrar."); process.exit(0); }
+console.log(`\nSeries registradas hoy: ${today.length}${save ? ` · objetivos guardados: ${saved} · plan reescrito: ${replanned}${recommendation ? " · recomendacion fijada" : ""}` : ""}\n`);
 for (const r of rows) {
   console.log(`${r.core ? "[core] " : ""}${r.name}  (${r.plan})${r.id ? `  id=${r.id} slot=${r.slotId}` : ""}`);
   if (!r.id) { console.log(`   ! sin ejercicio del catalogo — no se registra`); continue; }

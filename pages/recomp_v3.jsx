@@ -127,6 +127,19 @@ function useTargets(dep) {
   return byId;
 }
 
+// Today's recommendation, if the coach substituted a missed session into a light day.
+// Date-scoped: only today's row is ever fetched, so it clears itself the next day.
+function useRecommendation(today) {
+  const [rec, setRec] = useState(null);
+  useEffect(() => {
+    if (!today) return;
+    let live = true;
+    api("GET", `/api/recommendation?date=${today}`).then((r) => live && setRec(r)).catch(() => {});
+    return () => { live = false; };
+  }, [today]);
+  return rec;
+}
+
 const TargetLine = ({ target, accent }) => (
   <div style={{ display: "flex", flexWrap: "wrap", alignItems: "baseline", columnGap: 6, rowGap: 2, minWidth: 0, maxWidth: "100%", marginTop: 7, padding: "5px 9px", background: accent + "12", border: `1px solid ${accent}33`, borderRadius: 7 }}>
     <span style={{ fontSize: 7, color: accent, letterSpacing: 1.5, fontFamily: MONO, flexShrink: 0 }}>OBJETIVO</span>
@@ -274,7 +287,7 @@ const isTimed = (slot) => /seg/i.test(slot.reps ?? "");
 // Plan day keys (planKey in db.mjs) by Date.getDay(), for opening on today's session.
 const WEEKDAY_KEYS = ["domingo", "lunes", "martes", "miercoles", "jueves", "viernes", "sabado"];
 
-const TrainingTab = ({ plan, today }) => {
+const TrainingTab = ({ plan, today, recommendation }) => {
   const [activeDay, setActiveDay] = useState(0);
   const [expandedEx, setExpandedEx] = useState(null);
   const log = useSets(today);
@@ -285,15 +298,17 @@ const TrainingTab = ({ plan, today }) => {
   const autoPicked = useRef(false);
 
   // Select today's plan day once, after mount (today is client-only), then bring its
-  // button into view — never again, so a day the user tapped sticks.
+  // button into view — never again, so a day the user tapped sticks. When the coach has
+  // substituted a session for today, open that recommended day instead of the calendar one.
   useEffect(() => {
     if (autoPicked.current || !today || !days.length) return;
     autoPicked.current = true;
-    const i = days.findIndex((d) => d.key === WEEKDAY_KEYS[parseDate(today).getDay()]);
+    const wantKey = recommendation?.plan_key ?? WEEKDAY_KEYS[parseDate(today).getDay()];
+    const i = days.findIndex((d) => d.key === wantKey);
     if (i < 0) return;
     setActiveDay(i);
     requestAnimationFrame(() => dayStrip.current?.children[i]?.scrollIntoView({ inline: "center", block: "nearest" }));
-  }, [today, days]);
+  }, [today, days, recommendation]);
   const sel = days[activeDay];
   const accent = dayAccent(sel?.type);
   const setsFor = (slot) => (slot.exercise_id ? log.sets.filter((s) => s.exercise_id === slot.exercise_id) : []);
@@ -305,6 +320,13 @@ const TrainingTab = ({ plan, today }) => {
 
   return (
     <div>
+      {recommendation && (
+        <div className="fadein" style={{ margin: "12px 16px 0", padding: "10px 12px", background: T.gold + "14", border: `1px solid ${T.gold}44`, borderLeft: `3px solid ${T.gold}`, borderRadius: 10 }}>
+          <div style={{ fontSize: 8, letterSpacing: 2, fontFamily: MONO, color: T.gold, marginBottom: 4 }}>// HOY SUGERIDO</div>
+          <div style={{ fontFamily: GROT, fontSize: 13, fontWeight: 700, color: T.bone, lineHeight: 1.1 }}>{plan.days.find((d) => d.key === recommendation.plan_key)?.label ?? recommendation.title}</div>
+          <div style={{ fontSize: 9.5, color: T.ash, lineHeight: 1.5, marginTop: 4, overflowWrap: "anywhere" }}>{recommendation.reason}</div>
+        </div>
+      )}
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap", padding: "9px 16px", background: T.surface, borderBottom: `1px solid ${T.line}` }}>
         {[["Hombro", J.shoulder], ["Codo", J.elbow], ["Rodilla", J.knee], ["Cadera", J.hip]].map(([lbl, col]) => (
           <div key={lbl} style={{ display: "flex", alignItems: "center", gap: 5 }}>
@@ -804,6 +826,7 @@ export default function PlanRecomp() {
   const plan = usePlan();
   const measurements = useMeasurements();
   const sessionsPerWeek = useSessionsPerWeek(today);
+  const recommendation = useRecommendation(today);
   const latest = measurements.rows[measurements.rows.length - 1] ?? null;
   useEffect(() => { setToday(localDate()); }, []);
 
@@ -858,7 +881,7 @@ export default function PlanRecomp() {
 
       <div key={tab}>
         {tab === "dash" ? <DashboardTab measurements={measurements.rows} sessionsPerWeek={sessionsPerWeek} error={measurements.error} />
-          : tab === "entreno" ? <TrainingTab plan={plan} today={today} />
+          : tab === "entreno" ? <TrainingTab plan={plan} today={today} recommendation={recommendation} />
           : tab === "registro" ? <LogTab exercises={exercises} plan={plan} today={today} />
           : <NutritionTab />}
       </div>

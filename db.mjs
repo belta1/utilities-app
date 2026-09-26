@@ -145,6 +145,24 @@ const SCHEMA = `
     set_on        date NOT NULL DEFAULT current_date,
     updated_at    timestamptz NOT NULL DEFAULT now()
   );
+
+  -- What to actually train on a given date when it differs from the fixed weekly plan:
+  -- a date-scoped pointer at an existing plan day, written by 'hoy' when the week's
+  -- coverage is off (a missed strength/cardio day gets substituted into a light day).
+  -- One row per date; the plan itself (plan_days, keyed by weekday) is never touched, so
+  -- the recurring plan survives. The dashboard reads only today's row, so past rows are
+  -- inert. plan_key / source_key are natural keys into plan_days.key (validated in the API).
+  CREATE TABLE IF NOT EXISTS daily_recommendation (
+    recommended_on date PRIMARY KEY,
+    plan_key       text NOT NULL,
+    source_key     text,
+    kind           text NOT NULL DEFAULT 'substitution',
+    title          text,
+    reason         text NOT NULL,
+    set_by         text NOT NULL DEFAULT 'hoy',
+    created_at     timestamptz NOT NULL DEFAULT now(),
+    updated_at     timestamptz NOT NULL DEFAULT now()
+  );
 `;
 
 // The database itself (PGDATABASE) must already exist; only the tables are managed here.

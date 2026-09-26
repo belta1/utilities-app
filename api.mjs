@@ -430,6 +430,53 @@ async function deleteTarget(exerciseId) {
   return { deleted: exerciseId };
 }
 
+// ── daily recommendation: what to train today when it differs from the plan ──
+
+const RECOMMENDATION_COLS = `to_char(r.recommended_on, 'YYYY-MM-DD') AS recommended_on,
+  r.plan_key, r.source_key, r.kind, r.title, r.reason, r.set_by, r.updated_at`;
+
+async function getRecommendation(date) {
+  if (!date) throw bad("date is required (YYYY-MM-DD)");
+  const { rows } = await query(
+    `SELECT ${RECOMMENDATION_COLS} FROM daily_recommendation r WHERE r.recommended_on = $1`,
+    [date],
+  );
+  return rows[0] ?? null;
+}
+
+// Upsert on the date. plan_key (and source_key, when given) must name a real plan day, so a
+// swapped/renamed plan stays consistent and the dashboard can always render the target day.
+async function putRecommendation(body) {
+  const date = asDate(body.recommended_on ?? body.date, "recommended_on");
+  if (!date) throw bad("recommended_on is required (YYYY-MM-DD)");
+  const planKey = asText(body.plan_key, "plan_key", { required: true, max: 40 });
+  const sourceKey = asText(body.source_key, "source_key", { max: 40 });
+  const reason = asText(body.reason, "reason", { required: true, max: 500 });
+  const { rows: keys } = await query("SELECT key FROM plan_days");
+  const known = new Set(keys.map((k) => k.key));
+  if (!known.has(planKey)) throw bad(`no plan day "${planKey}"`);
+  if (sourceKey && !known.has(sourceKey)) throw bad(`no plan day "${sourceKey}"`);
+  const { rows } = await query(
+    `WITH up AS (
+       INSERT INTO daily_recommendation (recommended_on, plan_key, source_key, kind, title, reason, set_by)
+       VALUES ($1, $2, $3, coalesce($4, 'substitution'), $5, $6, coalesce($7, 'hoy'))
+       ON CONFLICT (recommended_on) DO UPDATE SET plan_key = EXCLUDED.plan_key, source_key = EXCLUDED.source_key,
+         kind = EXCLUDED.kind, title = EXCLUDED.title, reason = EXCLUDED.reason, set_by = EXCLUDED.set_by, updated_at = now()
+       RETURNING *)
+     SELECT ${RECOMMENDATION_COLS} FROM up r`,
+    [date, planKey, sourceKey, asText(body.kind, "kind", { max: 40 }), asText(body.title, "title", { max: 120 }),
+     reason, asText(body.set_by, "set_by", { max: 40 })],
+  );
+  return rows[0];
+}
+
+async function deleteRecommendation(date) {
+  if (!date) throw bad("date is required (YYYY-MM-DD)");
+  const { rowCount } = await query("DELETE FROM daily_recommendation WHERE recommended_on = $1", [date]);
+  if (!rowCount) throw new ApiError(404, "no recommendation for that date");
+  return { deleted: date };
+}
+
 async function updateSet(id, body) {
   const fields = [];
   const params = [id];
@@ -479,6 +526,9 @@ const routes = [
   ["GET", /^\/api\/measurements$/, (_m, q) => listMeasurements(Math.min(asNumber(q.get("limit") ?? 24, "limit", { min: 1, integer: true }), 200))],
   ["PUT", /^\/api\/measurements$/, (_m, _q, body) => putMeasurement(body)],
   ["DELETE", /^\/api\/measurements\/(\d+)$/, (m) => deleteMeasurement(Number(m[1]))],
+  ["GET", /^\/api\/recommendation$/, (_m, q) => getRecommendation(asDate(q.get("date"), "date"))],
+  ["PUT", /^\/api\/recommendation$/, (_m, _q, body) => putRecommendation(body)],
+  ["DELETE", /^\/api\/recommendation\/(\d{4}-\d{2}-\d{2})$/, (m) => deleteRecommendation(asDate(m[1], "date"))],
   ["GET", /^\/api\/targets$/, () => listTargets()],
   ["PUT", /^\/api\/exercises\/(\d+)\/target$/, (m, _q, body) => putTarget(Number(m[1]), body)],
   ["DELETE", /^\/api\/exercises\/(\d+)\/target$/, (m) => deleteTarget(Number(m[1]))],

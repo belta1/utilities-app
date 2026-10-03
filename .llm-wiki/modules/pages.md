@@ -14,8 +14,8 @@ One `.jsx` = one route. Served by [server](server.md), compiled by [jsx](jsx.md)
   its data from `/api/*`.
 - `pages/recomp_v2.jsx` — the **frozen** original; hard-codes its own copy of everything.
 - `pages/hello.jsx`, `pages/list.jsx` — small examples.
-- `pages/_lib/recomp/{tokens,data,ui}.jsx` — private shared modules (design tokens; meal/macro
-  content; shared tabs/ui). Importable, **never served** (any `_` path segment is private).
+- `pages/_lib/recomp/{tokens,kit,data,ui}.jsx` — private shared modules (design tokens; UI primitives; meal/macro
+  content; the Cuerpo and Comida tabs). Importable, **never served** (any `_` path segment is private).
 
 ## Two kinds of page
 
@@ -40,8 +40,8 @@ One `.jsx` = one route. Served by [server](server.md), compiled by [jsx](jsx.md)
 - **Import boundary:** pages may import files under `pages/` and packages from `node_modules`
   only — **never** `seed/`, `api.mjs`, `db.mjs`. Pages are a leaf.
 - **Everything a page imports ships to the browser** — keep heavy data in the API, not in `_lib`.
-- Copy is **Spanish without accents** (`musculo`, `Nutricion`). Labels use the `// SECTION_NAME`
-  mono style. House style tokens/fonts in [conventions](../conventions.md).
+- Copy is **Spanish without accents** (`musculo`, `Nutricion`), sentence case. Look and
+  primitives ("Goma y tiza", `tokens.jsx` + `kit.jsx`) in [conventions](../conventions.md).
 - **Dashboard content that is data lives in Postgres, not here** — plan, targets, measurements,
   figures. Editing those is an API call, not a page edit. See [architecture](../architecture.md).
 - **"HOY sugerido"**: `recomp_v3.jsx`'s `useRecommendation(today)` fetches

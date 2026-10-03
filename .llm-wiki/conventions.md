@@ -55,10 +55,16 @@ How to write code that matches this repo. Derived from the actual code — the r
 
 - **Spanish, written without accents** in page copy (`musculo`, `ultima`, `Nutricion`).
   (The coach's own manual and Spanish output *do* use accents — that's runtime text, not code.)
-- Design tokens in `pages/_lib/recomp/tokens.jsx` (`T.bg`, `T.surface`, accents
-  `T.copper`/`T.steel`/`T.sage`/`T.gold`/`T.lilac`, text `T.bone`/`T.ash`/`T.faint`).
-  Fonts: Space Grotesk (titles/values/buttons) + JetBrains Mono (labels/meta).
-- Self-contained styling: inline styles + one `<style>` block per page. No CSS/image
+- "Goma y tiza", phone first. Tokens in `pages/_lib/recomp/tokens.jsx`: slate `T.bg`/
+  `T.surface`/`T.raised`/`T.line`, chalk text `T.bone`/`T.ash`/`T.faint`, plate-color accents
+  by movement pattern `T.push` (red) / `T.pull` (blue) / `T.legs` (yellow) / `T.core` (green),
+  plus `T.cardio`, `T.recovery`, `T.danger`. Old keys (`copper`, `gold`, `sage`…) are aliases.
+- One font, Archivo (Google Fonts, variable width): text at normal width, numbers and session
+  names condensed via the `NUM` style object. Sentence case; no mono, no `// CAPS` labels.
+- Shared primitives in `pages/_lib/recomp/kit.jsx` (`GlobalStyle`, `Card`, `Section`, `Btn`,
+  `Pill`, `Stepper`, `PlateRow`, `Ring`, `SetChip`, `BottomNav`, `ErrorNote`). Bottom nav,
+  44–48 px touch targets, `Btn` defaults to `type="button"`.
+- Self-contained styling: inline styles + one `<style>` block (`GlobalStyle`). No CSS/image
   imports — the bundler isn't configured for them.
 
 ## Testing

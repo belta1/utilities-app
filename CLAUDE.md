@@ -61,17 +61,21 @@ newest mtime under `pages/`, so any edit is live on the next request — no rest
 - **Small, stable bundle.** Everything a page imports ships to the browser. Keep heavy
   data in the API, not in `_lib`.
 - **Copy is Spanish, written without accents** (e.g. `musculo`, `ultima`, `Nutricion`),
-  matching the existing pages. Labels use the `// SECTION_NAME` mono style.
+  matching the existing pages. Sentence case; buttons are verbs ("Anadir serie 3").
 
 ## House style (RECOMP)
 
-Tokens in `pages/_lib/recomp/tokens.jsx`: `T.bg #14110F`, `T.surface`, `T.raised`,
-`T.line`, accents `T.copper` (strength / primary), `T.steel` (cardio), `T.sage`
-(recovery / ok), `T.gold` (highlight), `T.lilac`; text `T.bone` / `T.ash` / `T.faint`.
-Fonts: Space Grotesk (titles, values, buttons) + JetBrains Mono (labels, meta). Cards:
-`background: T.surface`, `1px solid T.line`, radius 12–14, a 3px accent left border on
-the "current" card, `.fadein` on tab switch. `/` serves `recomp_v3` directly (`HOME_PAGE`
-in `server.mjs`); there is no index listing.
+"Goma y tiza", phone first. Tokens in `pages/_lib/recomp/tokens.jsx`: slate `T.bg #15191C`,
+`T.surface`, `T.raised`, `T.line`; chalk text `T.bone` / `T.ash` / `T.faint`; accents are the
+competition-plate colors **by movement pattern** — `T.push` red (empuje), `T.pull` blue (halar),
+`T.legs` yellow (pierna), `T.core` green (core, done) — plus `T.cardio`, `T.recovery`,
+`T.danger` (old keys copper/gold/sage… are aliases). A day's accent comes from `dayAccent()`
+in `recomp_v3.jsx`. One font family, Archivo: text at normal width, numbers and session names
+condensed via `NUM` (800, tabular). No mono, no `// CAPS` labels. Primitives in
+`pages/_lib/recomp/kit.jsx` (`GlobalStyle`, `Card`, `Section`, `Btn`, `Pill`, `Stepper`,
+`PlateRow`, `Ring`, `SetChip`, `BottomNav`): bottom navigation, 44–48 px targets, cards radius
+20 with a 4px inset accent edge. `/` serves `recomp_v3` directly (`HOME_PAGE` in `server.mjs`);
+there is no index listing.
 
 ## Adding data / API
 

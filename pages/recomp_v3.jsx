@@ -3,16 +3,17 @@
 // Everything with a number or a figure in it comes from the database: the catalog and
 // its animated figures, the plan day and its prescribed sets/reps/rest, the load ladder
 // and execution detail of each exercise, the coach's targets, and the body measurements
-// on the telemetry tab. Swapping an exercise or rebalancing a target is therefore a
+// on the body tab. Swapping an exercise or rebalancing a target is therefore a
 // write to the DB — no deploy, no page edit. Only the written content (weekly menu,
 // macros, supplements, post-workout meals) still lives in ./_lib/recomp/data.jsx.
+//
+// Look: "Goma y tiza" (./_lib/recomp/tokens.jsx, ./_lib/recomp/kit.jsx) — phone first,
+// bottom navigation, plate colors per movement pattern.
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { T, J } from "./_lib/recomp/tokens.jsx";
+import { T, NUM } from "./_lib/recomp/tokens.jsx";
+import { GlobalStyle, Card, Section, Btn, Pill, Stepper, PlateRow, Ring, SetChip, BottomNav, ErrorNote } from "./_lib/recomp/kit.jsx";
 import { POST_WORKOUT } from "./_lib/recomp/data.jsx";
 import { DashboardTab, NutritionTab } from "./_lib/recomp/ui.jsx";
-
-const MONO = "'JetBrains Mono',monospace";
-const GROT = "'Space Grotesk',sans-serif";
 
 // ═══════════════════════════════════════════════════════════════
 // API + DATE HELPERS
@@ -140,16 +141,6 @@ function useRecommendation(today) {
   return rec;
 }
 
-const TargetLine = ({ target, accent }) => (
-  <div style={{ display: "flex", flexWrap: "wrap", alignItems: "baseline", columnGap: 6, rowGap: 2, minWidth: 0, maxWidth: "100%", marginTop: 7, padding: "5px 9px", background: accent + "12", border: `1px solid ${accent}33`, borderRadius: 7 }}>
-    <span style={{ fontSize: 7, color: accent, letterSpacing: 1.5, fontFamily: MONO, flexShrink: 0 }}>OBJETIVO</span>
-    <span style={{ fontSize: 12, fontFamily: GROT, fontWeight: 700, color: T.bone, flexShrink: 0, whiteSpace: "nowrap" }}>
-      {target.load_kg != null && <>{target.load_kg}<span style={{ fontSize: 9, color: T.ash }}>kg</span></>}{target.load_kg != null && target.reps && " × "}{target.reps}
-    </span>
-    {target.reason && <span style={{ flex: "1 1 160px", minWidth: 0, fontSize: 9, color: T.ash, lineHeight: 1.45, whiteSpace: "normal", overflowWrap: "anywhere" }}>{target.reason}</span>}
-  </div>
-);
-
 // Last few earlier sessions of an exercise, newest first — any day it was done, whatever
 // plan day it belonged to. The first one prefills the logger; all of them are the history.
 function useRecentSessions(exerciseId, before, limit = 4) {
@@ -178,50 +169,69 @@ const ExerciseImage = ({ exercise, accent }) => (
     dangerouslySetInnerHTML={{ __html: exercise?.svg || GENERIC_SVG }} />
 );
 
-const Label = ({ children, color = T.faint, style }) => (
-  <div style={{ fontSize: 8, letterSpacing: 2, color, fontFamily: MONO, ...style }}>{children}</div>
-);
+const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+const fmtDay = (iso) => cap(fmtDate(iso).replace(/\./g, ""));          // "Vie, 03 oct"
+const unit = { fontSize: 13, color: T.ash, fontWeight: 500, fontStretch: "100%" };
+const subTitle = { fontSize: 13, fontWeight: 600, color: T.ash, marginBottom: 8 };
 
-const inputStyle = {
-  width: "100%", minWidth: 0, background: T.bg, border: `1px solid ${T.line}`, borderRadius: 8,
-  color: T.bone, padding: "8px 9px", fontFamily: GROT, fontSize: 14, fontWeight: 700, outline: "none",
+// ═══════════════════════════════════════════════════════════════
+// MOVEMENT PATTERNS — the split the program is built on, and the plate color of each
+// ═══════════════════════════════════════════════════════════════
+// Picker groups by movement pattern. Plan exercises take the pattern of the day they
+// belong to (Lunes empuje, Martes halar, Miercoles pierna, core finishers) and lead their
+// group in program order; the rest of the catalog is classified by muscle group, with a
+// few pulls that live under "Hombros" (face pull, pajaros, remo al menton) caught by name.
+const PATTERNS = [
+  ["push", "Empuje", "Pecho, hombros y triceps"],
+  ["pull", "Halar", "Espalda, biceps y deltoide posterior"],
+  ["legs", "Pierna", "Cuadriceps, gluteos, isquios y gemelos"],
+  ["core", "Core", "Abdomen y lumbar"],
+  ["other", "Otros", ""],
+];
+const PATTERN_OF_GROUP = {
+  Pecho: "push", Hombros: "push", Triceps: "push",
+  Espalda: "pull", Biceps: "pull", Trapecio: "pull",
+  Piernas: "legs", Gluteos: "legs", Isquios: "legs", Gemelos: "legs", "Cadena posterior": "legs",
+  Core: "core",
 };
+const dayPattern = (d) => (d.type === "core" ? "core" : /Pierna/.test(d.label) ? "legs" : /Halar/.test(d.label) && !/Empuje/.test(d.label) ? "pull" : /Empuje/.test(d.label) && !/Halar/.test(d.label) ? "push" : null);
+const guessPattern = (e) => (/face pull|pajaros|remo|encogimiento/i.test(e.name) ? "pull" : PATTERN_OF_GROUP[e.muscle_group] ?? "other");
 
-const NumField = ({ label, value, onChange, placeholder, step = 1, accent }) => (
-  <label style={{ flex: 1, minWidth: 0 }}>
-    <Label style={{ marginBottom: 4 }}>{label}</Label>
-    <input type="number" inputMode="decimal" enterKeyHint="go" step={step} min={0} value={value} placeholder={placeholder}
-      onChange={(e) => onChange(e.target.value)}
-      style={{ ...inputStyle, borderColor: value ? accent + "88" : T.line }} />
-  </label>
-);
+const PATTERN_NAME = { push: "Empuje", pull: "Halar", legs: "Pierna", core: "Core" };
+const TYPE_NAME = { lesmills: "Cardio", recovery: "Balance", core: "Core", rest: "Descanso", strength: "Rotacion" };
 
-const Btn = ({ children, onClick, accent = T.copper, disabled, small, ghost, style, type = "button" }) => (
-  <button type={type} onClick={onClick} disabled={disabled} style={{
-    background: ghost ? "none" : disabled ? T.raised : accent, color: ghost ? accent : disabled ? T.faint : T.bg,
-    border: ghost ? `1px solid ${accent}66` : "none", borderRadius: 8, cursor: disabled ? "default" : "pointer",
-    padding: small ? "5px 9px" : "9px 14px", fontFamily: GROT, fontWeight: 700, fontSize: small ? 11 : 13,
-    letterSpacing: 0.5, whiteSpace: "nowrap", transition: "all .15s", ...style,
-  }}>{children}</button>
-);
+// A day's accent: its plate color when it trains one pattern, otherwise its kind of session.
+const dayAccent = (d) => {
+  if (!d) return T.ash;
+  if (d.type === "lesmills") return T.cardio;
+  if (d.type === "recovery") return T.recovery;
+  if (d.type === "rest") return T.faint;
+  const p = dayPattern(d);
+  return p ? T[p] : T.bone;                    // the Friday rotation trains both
+};
+const dayKind = (d) => PATTERN_NAME[dayPattern(d)] ?? TYPE_NAME[d.type] ?? "";
+const dayTitle = (d) => (d.type === "strength" ? cap(d.label.split("—").pop().trim()) : dayKind(d));
 
-const SetChip = ({ set, accent, onRemove }) => (
-  <div style={{ display: "inline-flex", alignItems: "center", gap: 6, background: T.bg, border: `1px solid ${accent}44`, borderRadius: 7, padding: "4px 7px 4px 9px" }}>
-    <span style={{ fontSize: 8, color: T.faint, fontFamily: MONO }}>S{set.set_number}</span>
-    <span style={{ fontSize: 12, fontFamily: GROT, fontWeight: 700, color: T.bone }}>
-      {set.duration_s
-        ? <>{set.load_kg > 0 && <>{set.load_kg}<span style={{ fontSize: 9, color: T.ash }}>kg</span> · </>}{set.duration_s}<span style={{ fontSize: 9, color: T.ash }}>s</span></>
-        : <>{set.load_kg}<span style={{ fontSize: 9, color: T.ash }}>kg</span> × {set.reps}</>}
+// ═══════════════════════════════════════════════════════════════
+// SET LOGGER — used by the training cards and the log tab
+// ═══════════════════════════════════════════════════════════════
+const TargetLine = ({ target }) => (
+  <div style={{ display: "flex", alignItems: "baseline", columnGap: 10, rowGap: 2, flexWrap: "wrap" }}>
+    <span style={{ fontSize: 13, color: T.ash }}>Objetivo</span>
+    <span style={{ ...NUM, fontSize: 22, whiteSpace: "nowrap" }}>
+      {target.load_kg != null && <>{target.load_kg}<span style={unit}> kg</span></>}{target.load_kg != null && target.reps && " × "}{target.reps}
     </span>
-    {set.rir != null && <span title="Reps en reserva" style={{ fontSize: 8, color: set.rir === 0 ? "#D98A8A" : T.ash, fontFamily: MONO }}>R{set.rir}</span>}
-    {onRemove && <button onClick={onRemove} title="Borrar serie" style={{ background: "none", border: "none", color: T.faint, cursor: "pointer", fontSize: 11, padding: "0 2px" }}>✕</button>}
+    {target.reason && <span style={{ flexBasis: "100%", fontSize: 13, color: T.ash, lineHeight: 1.45, overflowWrap: "anywhere" }}>{target.reason}</span>}
   </div>
 );
+
+const RIR_OPTS = ["", "0", "1", "2", "3", "4", "5"];
+const loadStep = (e) => (e?.equipment === "Barra" ? 2.5 : 1);
 
 // Inline "add a set" form for one exercise. Empty fields fall back to the placeholder,
 // which is the previous set today, else the last set of the previous session. A set is
 // reps or seconds (planks); the mode follows the previous set, else the `timed` hint
-// from the plan, and can be flipped with the REPS/SEG toggle.
+// from the plan, and can be switched with the Reps / Seg toggle.
 const SetLogger = ({ exercise, accent, sets, log, date, timed = false }) => {
   const [kg, setKg] = useState("");
   const [n, setN] = useState("");
@@ -237,56 +247,72 @@ const SetLogger = ({ exercise, accent, sets, log, date, timed = false }) => {
   const rirVal = rir === "" ? null : Number(rir);
   const ok = Number.isFinite(kgVal) && kgVal >= 0 && Number.isInteger(nVal) && nVal > 0 && (rirVal === null || (Number.isInteger(rirVal) && rirVal >= 0 && rirVal <= 5));
   const submit = () => log.add({ exercise_id: exercise.id, load_kg: kgVal, [mode === "time" ? "duration_s" : "reps"]: nVal, rir: rirVal });
-  // A form, so the phone keyboard's Go / Enter adds the set like the + button does.
+  // A form, so the phone keyboard's Go / Enter adds the set like the button does.
   const onSubmit = (e) => { e.preventDefault(); if (ok && !log.busy) submit(); };
+  const switchMode = (m) => { if (m !== mode) { setMode(m); setN(""); setRir(""); } };
 
   return (
-    <div style={{ background: T.bg, border: `1px solid ${accent}55`, borderRadius: 9, padding: "10px 12px" }} onClick={(e) => e.stopPropagation()}>
-      <Label color={accent} style={{ marginBottom: 7 }}>// REGISTRO_HOY</Label>
+    <div onClick={(e) => e.stopPropagation()} style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       {history.length > 0 && (
-        <div style={{ marginBottom: 8, padding: "6px 8px", background: T.surface, borderRadius: 7, display: "flex", flexDirection: "column", gap: 2 }}>
-          <Label style={{ fontSize: 7, marginBottom: 2 }}>// HISTORIAL</Label>
-          {history.map((h, i) => (
-            <div key={h.performed_on} style={{ display: "flex", gap: 8, fontSize: 9, fontFamily: MONO, lineHeight: 1.5 }}>
-              <span style={{ flexShrink: 0, width: 78, whiteSpace: "nowrap", color: i === 0 ? accent : T.faint }}>{fmtDate(h.performed_on)}</span>
-              <span style={{ minWidth: 0, color: i === 0 ? T.bone : T.ash, overflowWrap: "anywhere" }}>{h.sets.map(fmtSet).join(" · ")}</span>
-            </div>
-          ))}
+        <div>
+          <div style={subTitle}>Historial</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {history.map((h, i) => (
+              <div key={h.performed_on} style={{ display: "grid", gridTemplateColumns: "92px 1fr", columnGap: 10, alignItems: "baseline" }}>
+                <span style={{ fontSize: 13, color: i === 0 ? T.bone : T.ash, whiteSpace: "nowrap" }}>{fmtDay(h.performed_on)}</span>
+                <span style={{ ...NUM, fontSize: 16, fontWeight: 700, color: i === 0 ? T.bone : T.ash, wordSpacing: 6, overflowWrap: "anywhere" }}>{h.sets.map(fmtSet).join(" ")}</span>
+              </div>
+            ))}
+          </div>
         </div>
       )}
-      {sets.length > 0 && (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 8 }}>
-          {sets.map((s) => <SetChip key={s.id} set={s} accent={accent} onRemove={() => log.remove(s.id)} />)}
+
+      <div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+          <span style={{ ...subTitle, marginBottom: 0 }}>{sets.length ? `Hoy, ${sets.length} ${sets.length === 1 ? "serie" : "series"}` : "Registrar serie"}</span>
+          <div role="group" aria-label="Medir por" style={{ display: "flex", background: T.bg, borderRadius: 10, padding: 3 }}>
+            {[["reps", "Reps"], ["time", "Seg"]].map(([m, l]) => (
+              <button key={m} type="button" aria-pressed={mode === m} onClick={() => switchMode(m)} style={{
+                height: 30, padding: "0 12px", borderRadius: 8, border: "none", fontSize: 13, fontWeight: 600,
+                background: mode === m ? T.raised : "none", color: mode === m ? T.bone : T.faint,
+              }}>{l}</button>
+            ))}
+          </div>
         </div>
-      )}
-      <form onSubmit={onSubmit} style={{ display: "flex", gap: 7, alignItems: "flex-end" }}>
-        <NumField label="CARGA KG" value={kg} onChange={setKg} placeholder={prev ? String(prev.load_kg) : mode === "time" ? "0" : "kg"} step={0.5} accent={accent} />
-        <NumField label={mode === "time" ? "SEGUNDOS" : "REPS"} value={n} onChange={setN} placeholder={prevN != null ? String(prevN) : mode === "time" ? "seg" : "reps"} accent={accent} />
-        {mode === "reps" && (
-          <label style={{ flex: "0 0 46px", minWidth: 0 }} title="Reps en reserva al terminar la serie (0 = fallo)">
-            <Label style={{ marginBottom: 4 }}>RIR</Label>
-            <input type="number" inputMode="numeric" enterKeyHint="go" min={0} max={5} value={rir} placeholder="–" onChange={(e) => setRir(e.target.value)}
-              style={{ ...inputStyle, padding: "8px 6px", textAlign: "center", borderColor: rir !== "" ? accent + "88" : T.line }} />
-          </label>
+        {sets.length > 0 && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 }}>
+            {sets.map((s) => <SetChip key={s.id} set={s} accent={accent} onRemove={() => log.remove(s.id)} />)}
+          </div>
         )}
-        <button type="button" onClick={() => { setMode(mode === "time" ? "reps" : "time"); setN(""); setRir(""); }} title="Cambiar reps / segundos" style={{
-          alignSelf: "flex-end", background: T.surface, border: `1px solid ${T.line}`, borderRadius: 8, padding: "9px 6px", cursor: "pointer",
-          fontFamily: MONO, fontSize: 8, letterSpacing: 1, color: T.ash, whiteSpace: "nowrap",
-        }}>
-          <span style={{ color: mode === "reps" ? accent : T.faint }}>REPS</span>/<span style={{ color: mode === "time" ? accent : T.faint }}>SEG</span>
-        </button>
-        <Btn type="submit" accent={accent} disabled={!ok || log.busy} style={{ padding: "9px 10px" }}>+ S{sets.length + 1}</Btn>
-      </form>
-      {log.error && <div style={{ marginTop: 6, fontSize: 10, color: "#D98A8A" }}>{log.error}</div>}
+        <form onSubmit={onSubmit} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <div style={{ display: "flex", gap: 10 }}>
+            <Stepper label="Carga" unit="kg" value={kg} onChange={setKg} step={loadStep(exercise)} accent={accent}
+              placeholder={prev ? String(prev.load_kg) : mode === "time" ? "0" : "–"} />
+            <Stepper label={mode === "time" ? "Segundos" : "Reps"} value={n} onChange={setN} step={mode === "time" ? 5 : 1} accent={accent} inputMode="numeric"
+              placeholder={prevN != null ? String(prevN) : "–"} />
+          </div>
+          {mode === "reps" && (
+            <div role="group" aria-label="Reps en reserva" style={{ display: "flex", alignItems: "center", gap: 4 }}>
+              <span title="Reps en reserva al terminar la serie (0 = fallo)" style={{ fontSize: 13, color: T.ash, width: 34, flexShrink: 0 }}>RIR</span>
+              {RIR_OPTS.map((v) => (
+                <button key={v || "none"} type="button" aria-pressed={rir === v} onClick={() => setRir(v)} style={{
+                  flex: 1, minWidth: 0, height: 40, borderRadius: 10, border: "none", fontSize: 15, fontWeight: 700,
+                  background: rir === v ? accent : T.bg, color: rir === v ? T.bg : T.ash,
+                }}>{v === "" ? "–" : v}</button>
+              ))}
+            </div>
+          )}
+          <Btn type="submit" full accent={accent} disabled={!ok || log.busy}>{log.busy ? "Guardando…" : `Anadir serie ${sets.length + 1}`}</Btn>
+        </form>
+      </div>
+      {log.error && <ErrorNote>{log.error}</ErrorNote>}
     </div>
   );
 };
 
 // ═══════════════════════════════════════════════════════════════
-// TRAINING TAB — v2 plan cards, images from DB, logger inside each card
+// TRAINING TAB — the plan day, one card per exercise, logger inside each card
 // ═══════════════════════════════════════════════════════════════
-const dayAccent = (type) => type === "strength" ? T.copper : type === "lesmills" ? T.steel : type === "recovery" ? T.sage : type === "core" ? T.gold : T.faint;
-
 // A plan slot is the row the card renders. It carries its exercise's figure, load
 // ladder and execution detail, so a card needs nothing else; `exercise_id` is null only
 // for the Les Mills / cycling placeholders, which are shown but never logged.
@@ -295,12 +321,98 @@ const isTimed = (slot) => /seg/i.test(slot.reps ?? "");
 // Plan day keys (planKey in db.mjs) by Date.getDay(), for opening on today's session.
 const WEEKDAY_KEYS = ["domingo", "lunes", "martes", "miercoles", "jueves", "viernes", "sabado"];
 
+// Load ladder, muscles, the steps (a real sequence, so numbered) and the common error.
+const HowTo = ({ ex, accent }) => {
+  if (!(ex.load_start || ex.load_target || ex.muscles || ex.steps?.length || ex.common_error)) return null;
+  return (
+    <details style={{ borderTop: `1px solid ${T.line}`, paddingTop: 4 }}>
+      <summary style={{ minHeight: 44, display: "flex", alignItems: "center", fontSize: 15, fontWeight: 600, cursor: "pointer" }}>
+        Como se hace<span className="chev" style={{ marginLeft: "auto", color: T.ash, fontSize: 20, transition: "transform .2s" }}>+</span>
+      </summary>
+      <div className="open" style={{ display: "flex", flexDirection: "column", gap: 16, paddingBottom: 4 }}>
+        {(ex.load_start || ex.load_target) && (
+          <div>
+            <div style={{ display: "flex", gap: 24 }}>
+              {[["Inicio", ex.load_start], ["Semana 6", ex.load_target]].map(([l, v]) => (
+                <div key={l}>
+                  <div style={{ fontSize: 13, color: T.ash }}>{l}</div>
+                  <div style={{ ...NUM, fontSize: 20, color: T.bone }}>{v ?? "—"}</div>
+                </div>
+              ))}
+            </div>
+            {ex.load_note && <div style={{ fontSize: 13, color: T.ash, marginTop: 6, lineHeight: 1.45 }}>{ex.load_note}</div>}
+          </div>
+        )}
+        {ex.muscles && (
+          <div>
+            <div style={subTitle}>Musculos</div>
+            <div style={{ fontSize: 14, lineHeight: 1.5 }}>{ex.muscles}</div>
+          </div>
+        )}
+        {ex.steps?.length > 0 && (
+          <ol style={{ listStyle: "none", display: "flex", flexDirection: "column", gap: 10 }}>
+            {ex.steps.map((step, i) => (
+              <li key={i} style={{ display: "flex", gap: 12, fontSize: 14, lineHeight: 1.5 }}>
+                <span style={{ ...NUM, fontSize: 16, color: accent, width: 14, flexShrink: 0 }}>{i + 1}</span>
+                <span>{step}</span>
+              </li>
+            ))}
+          </ol>
+        )}
+        {ex.common_error && (
+          <div style={{ fontSize: 14, lineHeight: 1.5, color: T.danger, background: T.danger + "14", borderRadius: 12, padding: "10px 12px" }}>
+            Evita: {ex.common_error}
+          </div>
+        )}
+      </div>
+    </details>
+  );
+};
+
+const ExerciseCard = ({ ex, accent, open, onToggle, done, coachTarget, today, log }) => {
+  const planned = Number(ex.sets) || 0;
+  const complete = planned > 0 && done.length >= planned;
+  const prescribed = ex.sets !== "—";
+  return (
+    <Card accent={done.length ? (complete ? T.core : accent) : undefined} style={{ padding: 0, background: open ? T.raised : T.surface, transition: "background .2s" }}>
+      <button type="button" onClick={onToggle} aria-expanded={open} style={{
+        width: "100%", textAlign: "left", background: "none", border: "none", padding: 16, display: "flex", gap: 12, alignItems: "flex-start",
+      }}>
+        <div style={{ width: 64, height: 52, flexShrink: 0, borderRadius: 12, background: T.bg, padding: 3, overflow: "hidden" }}>
+          <ExerciseImage exercise={ex} accent={accent} />
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 16, fontWeight: 650, lineHeight: 1.25 }}>{ex.name}</div>
+          {prescribed ? (
+            <div style={{ display: "flex", columnGap: 10, alignItems: "baseline", flexWrap: "wrap", marginTop: 4 }}>
+              <span style={{ ...NUM, fontSize: 18 }}>{ex.sets} × {ex.reps}</span>
+              {ex.rest && ex.rest !== "—" && <span style={{ fontSize: 13, color: T.ash }}>pausa {ex.rest}</span>}
+            </div>
+          ) : ex.note && <div style={{ fontSize: 13, color: T.ash, marginTop: 4, lineHeight: 1.45 }}>{ex.note}</div>}
+        </div>
+        {planned > 0 && <div style={{ paddingTop: 3, maxWidth: 72 }}><PlateRow planned={planned} done={done.length} accent={accent} /></div>}
+      </button>
+      {(coachTarget || open) && (
+        <div style={{ padding: "0 16px 16px", marginTop: -4 }}>
+          {coachTarget && <TargetLine target={coachTarget} />}
+          {open && (
+            <div className="open" style={{ marginTop: coachTarget ? 16 : 0, display: "flex", flexDirection: "column", gap: 16 }}>
+              {prescribed && ex.note && <p style={{ fontSize: 14, color: T.ash, lineHeight: 1.5 }}>{ex.note}</p>}
+              {ex.exercise_id && today && <SetLogger exercise={{ id: ex.exercise_id, name: ex.name, equipment: ex.equipment }} accent={accent} sets={done} log={log} date={today} timed={isTimed(ex)} />}
+              <HowTo ex={ex} accent={accent} />
+            </div>
+          )}
+        </div>
+      )}
+    </Card>
+  );
+};
+
 const TrainingTab = ({ plan, today, recommendation }) => {
   const [activeDay, setActiveDay] = useState(0);
   const [expandedEx, setExpandedEx] = useState(null);
   const log = useSets(today);
   const targets = useTargets(log.sets);
-  const typeLabel = { strength: "FUERZA", lesmills: "CARDIO", recovery: "BALANCE", core: "CORE", rest: "OFF" };
   const days = plan.days;
   const dayStrip = useRef(null);
   const autoPicked = useRef(false);
@@ -318,225 +430,97 @@ const TrainingTab = ({ plan, today, recommendation }) => {
     requestAnimationFrame(() => dayStrip.current?.children[i]?.scrollIntoView({ inline: "center", block: "nearest" }));
   }, [today, days, recommendation]);
   const sel = days[activeDay];
-  const accent = dayAccent(sel?.type);
+  const accent = dayAccent(sel);
   const setsFor = (slot) => (slot.exercise_id ? log.sets.filter((s) => s.exercise_id === slot.exercise_id) : []);
   const main = sel ? sel.exercises.filter((x) => x.section !== "core") : [];
   const core = sel ? sel.exercises.filter((x) => x.section === "core") : [];
+  const counted = sel ? sel.exercises.filter((x) => x.exercise_id && Number(x.sets)) : [];
+  const totalPlanned = counted.reduce((a, x) => a + Number(x.sets), 0);
+  const totalDone = counted.reduce((a, x) => a + Math.min(setsFor(x).length, Number(x.sets)), 0);
+  const todayKey = today ? recommendation?.plan_key ?? WEEKDAY_KEYS[parseDate(today).getDay()] : null;
+  const recDay = recommendation && days.find((d) => d.key === recommendation.plan_key);
 
-  if (plan.error) return <div style={{ padding: "26px 16px", fontSize: 11, color: "#D98A8A" }}>No se pudo cargar el plan: {plan.error}</div>;
-  if (!sel) return <div style={{ padding: "26px 16px", fontSize: 10, color: T.faint, fontFamily: MONO, letterSpacing: 2 }}>// CARGANDO PLAN…</div>;
+  if (plan.error) return <div style={{ padding: 16 }}><ErrorNote>No se pudo cargar el plan: {plan.error}</ErrorNote></div>;
+  if (!sel) return <div style={{ padding: "32px 16px", fontSize: 15, color: T.ash }}>Cargando el plan…</div>;
+
+  const card = (ex, ac) => (
+    <ExerciseCard key={ex.id} ex={ex} accent={ac} open={expandedEx === ex.id} onToggle={() => setExpandedEx(expandedEx === ex.id ? null : ex.id)}
+      done={setsFor(ex)} coachTarget={ex.exercise_id ? targets[ex.exercise_id] : null} today={today} log={log} />
+  );
+  const pw = sel.post_key && POST_WORKOUT[sel.post_key];
 
   return (
     <div>
-      {recommendation && (
-        <div className="fadein" style={{ margin: "12px 16px 0", padding: "10px 12px", background: T.gold + "14", border: `1px solid ${T.gold}44`, borderLeft: `3px solid ${T.gold}`, borderRadius: 10 }}>
-          <div style={{ fontSize: 8, letterSpacing: 2, fontFamily: MONO, color: T.gold, marginBottom: 4 }}>{recommendation.kind === "rotation" ? "// ROTACION VIERNES" : "// HOY SUGERIDO"}</div>
-          <div style={{ fontFamily: GROT, fontSize: 13, fontWeight: 700, color: T.bone, lineHeight: 1.1 }}>{plan.days.find((d) => d.key === recommendation.plan_key)?.label ?? recommendation.title}</div>
-          <div style={{ fontSize: 9.5, color: T.ash, lineHeight: 1.5, marginTop: 4, overflowWrap: "anywhere" }}>{recommendation.reason}</div>
-        </div>
-      )}
-      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", padding: "9px 16px", background: T.surface, borderBottom: `1px solid ${T.line}` }}>
-        {[["Hombro", J.shoulder], ["Codo", J.elbow], ["Rodilla", J.knee], ["Cadera", J.hip]].map(([lbl, col]) => (
-          <div key={lbl} style={{ display: "flex", alignItems: "center", gap: 5 }}>
-            <div style={{ width: 7, height: 7, borderRadius: "50%", background: col }} />
-            <span style={{ fontSize: 8, color: T.ash, letterSpacing: 1.5, fontFamily: MONO }}>{lbl.toUpperCase()}</span>
-          </div>
+      <div ref={dayStrip} className="scrollx" style={{ display: "flex", gap: 8, overflowX: "auto", padding: "8px 16px 4px", scrollSnapType: "x proximity" }}>
+        {days.map((d, i) => (
+          <Pill key={d.id} on={activeDay === i} accent={dayAccent(d)} sub={dayKind(d)} onClick={() => { setActiveDay(i); setExpandedEx(null); }}>
+            {d.type === "core" ? "Core" : cap(d.day.slice(0, 3).toLowerCase())}
+          </Pill>
         ))}
       </div>
 
-      <div style={{ padding: "14px 14px 0" }}>
-        <div ref={dayStrip} style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 4, marginBottom: 14 }}>
-          {days.map((d, i) => {
-            const ac = dayAccent(d.type);
-            const on = activeDay === i;
-            return (
-              <button key={d.id} onClick={() => { setActiveDay(i); setExpandedEx(null); }} style={{
-                flexShrink: 0, padding: "8px 11px", borderRadius: 10, minWidth: 56, textAlign: "center", cursor: "pointer",
-                background: on ? T.raised : T.surface, border: `1px solid ${on ? ac : T.line}`, borderTop: `2px solid ${on ? ac : T.line}`,
-                color: on ? T.bone : T.ash, transition: "all .2s",
-              }}>
-                <div style={{ fontSize: 12, fontFamily: GROT, fontWeight: 700 }}>{d.day.slice(0, 3).toUpperCase()}</div>
-                <div style={{ fontSize: 7, marginTop: 2, letterSpacing: 1, color: on ? ac : T.faint, fontFamily: MONO }}>{typeLabel[d.type]}</div>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      <div key={activeDay} style={{ padding: "0 14px 26px" }} className="fadein">
-        <div style={{ background: T.surface, border: `1px solid ${T.line}`, borderLeft: `3px solid ${accent}`, borderRadius: 13, padding: "13px 16px", marginBottom: 10 }}>
-          <Label style={{ marginBottom: 4 }}>// SESION_{String(activeDay + 1).padStart(2, "0")} — {sel.day.toUpperCase()}</Label>
-          <div style={{ fontFamily: GROT, fontSize: 16, fontWeight: 700, color: T.bone, lineHeight: 1.2 }}>{sel.label}</div>
-          <div style={{ display: "flex", justifyContent: "space-between", marginTop: 5, alignItems: "center" }}>
-            <div style={{ fontSize: 10, color: T.ash }}>{sel.focus}</div>
-            {sel.is_optional
-              ? <div style={{ fontSize: 8, color: T.gold, border: `1px solid ${T.gold}55`, borderRadius: 6, padding: "2px 7px", fontFamily: MONO }}>OPCIONAL</div>
-              : sel.source && <div style={{ fontSize: 8, color: T.faint, fontFamily: MONO }}>{sel.source}</div>}
+      <div key={activeDay} className="fade" style={{ padding: "20px 16px 32px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, color: T.ash }}>
+              <span style={{ width: 10, height: 10, borderRadius: "50%", background: accent, flexShrink: 0 }} />
+              {sel.day}{sel.key === todayKey ? ", hoy" : ""}{sel.is_optional ? ", opcional" : ""}
+            </div>
+            <h1 style={{ ...NUM, fontSize: 40, lineHeight: 1, marginTop: 6 }}>{dayTitle(sel)}</h1>
+            <div style={{ fontSize: 14, color: T.ash, marginTop: 6, lineHeight: 1.4 }}>{sel.type === "strength" ? sel.focus : sel.label}</div>
           </div>
+          {totalPlanned > 0 && <Ring value={totalDone} total={totalPlanned} accent={accent} />}
         </div>
+
+        {recommendation && (
+          <div style={{ marginTop: 18, padding: "12px 14px", borderRadius: 16, background: T.surface, boxShadow: `inset 4px 0 0 ${dayAccent(recDay)}` }}>
+            <div style={{ fontSize: 15, fontWeight: 700 }}>
+              {recommendation.kind === "rotation" ? "Rotacion del viernes" : "Sugerido para hoy"}: {recDay ? dayTitle(recDay).toLowerCase() : recommendation.title}
+            </div>
+            <div style={{ fontSize: 13, color: T.ash, marginTop: 4, lineHeight: 1.45, overflowWrap: "anywhere" }}>{recommendation.reason}</div>
+          </div>
+        )}
+        {sel.tip && <p style={{ marginTop: 16, fontSize: 14, color: T.ash, lineHeight: 1.5 }}>{sel.tip}</p>}
 
         {sel.type === "rest" ? (
-          <div style={{ background: T.surface, borderRadius: 13, padding: 26, textAlign: "center", border: `1px solid ${T.line}` }}>
-            <div style={{ fontSize: 34, marginBottom: 8 }}>◼</div>
-            <div style={{ fontFamily: GROT, fontSize: 16, fontWeight: 700, color: T.bone, marginBottom: 6 }}>Descanso total</div>
-            <div style={{ fontSize: 11, color: T.ash, lineHeight: 1.8 }}>El musculo crece descansando.<br />Come bien · 7–8 h sueno · Hidratacion.</div>
-          </div>
+          <Card style={{ marginTop: 20, padding: 24 }}>
+            <div style={{ ...NUM, fontSize: 26 }}>Descanso total</div>
+            <p style={{ fontSize: 15, color: T.ash, lineHeight: 1.6, marginTop: 8 }}>El musculo crece descansando. Come bien, duerme 7 a 8 horas y bebe agua.</p>
+          </Card>
         ) : (
           <>
-            {sel.tip && <div style={{ background: "#241A10", border: `1px solid ${T.ember}44`, borderRadius: 11, padding: "10px 14px", marginBottom: 10, fontSize: 11, color: "#E8C49A", lineHeight: 1.7 }}>{sel.tip}</div>}
-            {sel.type === "strength" && <div style={{ fontSize: 9, color: T.faint, marginBottom: 8, fontFamily: MONO }}>tap ejercicio → registrar series · pesos sugeridos</div>}
-
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {main.map((ex) => {
-                const isExp = expandedEx === ex.id;
-                const done = setsFor(ex);
-                const target = Number(ex.sets) || 0;
-                const coachTarget = ex.exercise_id ? targets[ex.exercise_id] : null;
-                return (
-                  <div key={ex.id} onClick={() => setExpandedEx(isExp ? null : ex.id)}
-                    style={{ background: isExp ? T.raised : T.surface, border: `1px solid ${isExp ? accent + "66" : done.length ? accent + "33" : T.line}`, borderRadius: 12, padding: "11px 12px", cursor: "pointer", transition: "all .2s" }}>
-                    <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
-                      <div style={{ flexShrink: 0, width: 86, height: 68, background: T.bg, borderRadius: 9, border: `1px solid ${accent}26`, padding: 3, overflow: "hidden" }}>
-                        <ExerciseImage exercise={ex} accent={accent} />
-                      </div>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 12, fontWeight: 600, lineHeight: 1.35, color: T.bone, marginBottom: ex.note ? 3 : 0, fontFamily: GROT }}>{ex.name}</div>
-                        {ex.note && <div style={{ fontSize: 10, color: T.ash, lineHeight: 1.5 }}>{ex.note}</div>}
-                      </div>
-                      {ex.sets !== "—" && (
-                        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4, flexShrink: 0 }}>
-                          <div style={{ fontSize: 12, color: isExp ? accent : T.faint }}>{isExp ? "▲" : "▼"}</div>
-                          {target > 0 && (
-                            <div style={{ fontSize: 9, fontFamily: MONO, color: done.length >= target ? T.sage : done.length ? accent : T.faint, border: `1px solid ${done.length ? accent + "55" : T.line}`, borderRadius: 5, padding: "1px 5px" }}>
-                              {done.length}/{target}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                    {ex.sets !== "—" && (
-                      <div style={{ display: "flex", gap: 5, marginTop: 9 }}>
-                        {[["SER", ex.sets, accent], [isTimed(ex) ? "TIEMPO" : "REPS", ex.reps, T.bone], ["PAUSA", ex.rest, T.ash]].map(([lbl, val, col], j) => (
-                          <div key={j} style={{ background: T.bg, borderRadius: 7, padding: "5px 8px", flex: 1, textAlign: "center", border: `1px solid ${T.line}` }}>
-                            <div style={{ fontSize: 7, color: T.faint, letterSpacing: 1.5, fontFamily: MONO }}>{lbl}</div>
-                            <div style={{ fontSize: 12, fontFamily: GROT, fontWeight: 700, color: col }}>{val}</div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    {coachTarget && <TargetLine target={coachTarget} accent={accent} />}
-                    {isExp && (
-                      <div style={{ marginTop: 9, display: "flex", flexDirection: "column", gap: 8 }}>
-                        {ex.exercise_id && today && <SetLogger exercise={{ id: ex.exercise_id, name: ex.name }} accent={accent} sets={done} log={log} date={today} timed={isTimed(ex)} />}
-                        {(ex.load_start || ex.load_target) && (
-                          <div style={{ background: T.bg, border: `1px solid ${accent}33`, borderRadius: 9, padding: "10px 12px" }}>
-                            <Label style={{ marginBottom: 7 }}>// CARGA</Label>
-                            <div style={{ display: "flex", gap: 7, marginBottom: ex.load_note ? 7 : 0 }}>
-                              <div style={{ flex: 1, background: T.surface, borderRadius: 7, padding: "6px 9px" }}>
-                                <Label style={{ marginBottom: 2, letterSpacing: 0 }}>INICIO</Label>
-                                <div style={{ fontSize: 12, fontFamily: GROT, fontWeight: 700, color: accent }}>{ex.load_start ?? "—"}</div>
-                              </div>
-                              <div style={{ flex: 1, background: T.surface, borderRadius: 7, padding: "6px 9px" }}>
-                                <Label style={{ marginBottom: 2, letterSpacing: 0 }}>SEM_06</Label>
-                                <div style={{ fontSize: 12, fontFamily: GROT, fontWeight: 700, color: T.bone }}>{ex.load_target ?? "—"}</div>
-                              </div>
-                            </div>
-                            {ex.load_note && <div style={{ fontSize: 10, color: T.sage, lineHeight: 1.5 }}>{ex.load_note}</div>}
-                          </div>
-                        )}
-                        {(ex.muscles || ex.steps?.length) && (
-                          <div style={{ background: T.bg, border: `1px solid ${T.line}`, borderRadius: 9, padding: "10px 12px" }}>
-                            {ex.muscles && <>
-                              <Label style={{ marginBottom: 4 }}>// MUSCULOS</Label>
-                              <div style={{ fontSize: 10, color: T.gold, marginBottom: 9 }}>{ex.muscles}</div>
-                            </>}
-                            {ex.steps?.length > 0 && <>
-                              <Label style={{ marginBottom: 5 }}>// EJECUCION</Label>
-                              {ex.steps.map((step, pi) => (
-                                <div key={pi} style={{ display: "flex", gap: 8, marginBottom: 5 }}>
-                                  <div style={{ flexShrink: 0, width: 16, height: 16, borderRadius: 4, background: accent + "22", border: `1px solid ${accent}44`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 8, color: accent, fontFamily: MONO }}>{pi + 1}</div>
-                                  <div style={{ fontSize: 10, color: T.bone, lineHeight: 1.5, paddingTop: 1 }}>{step}</div>
-                                </div>
-                              ))}
-                            </>}
-                            {ex.common_error && (
-                              <div style={{ marginTop: 8, fontSize: 10, color: "#D98A8A", background: "#241414", border: "1px solid #4A2828", borderRadius: 7, padding: "6px 9px", lineHeight: 1.5 }}>
-                                ✕ {ex.common_error}
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+            {main.length > 0 && <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 20 }}>{main.map((ex) => card(ex, accent))}</div>}
 
             {core.length > 0 && (
-              <div style={{ marginTop: 12 }}>
-                <Label color={T.gold} style={{ fontSize: 9, marginBottom: 8 }}>// CORE_FINISHER — 5-8 MIN</Label>
-                <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-                  {core.map((ex) => {
-                    const isExp = expandedEx === ex.id;
-                    const done = setsFor(ex);
-                    const target = Number(ex.sets) || 0;
-                    const coachTarget = ex.exercise_id ? targets[ex.exercise_id] : null;
-                    return (
-                      <div key={ex.id} onClick={() => setExpandedEx(isExp ? null : ex.id)}
-                        style={{ background: isExp ? T.raised : T.surface, border: `1px solid ${isExp ? T.gold + "66" : done.length ? T.gold + "44" : T.gold + "22"}`, borderRadius: 11, padding: "10px 13px", cursor: "pointer", transition: "all .2s" }}>
-                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
-                          <div style={{ fontSize: 12, fontWeight: 600, color: T.gold, marginBottom: 3, fontFamily: GROT }}>{ex.name}</div>
-                          <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
-                            {target > 0 && (
-                              <div style={{ fontSize: 9, fontFamily: MONO, color: done.length >= target ? T.sage : done.length ? T.gold : T.faint, border: `1px solid ${done.length ? T.gold + "55" : T.line}`, borderRadius: 5, padding: "1px 5px" }}>
-                                {done.length}/{target}
-                              </div>
-                            )}
-                            <div style={{ fontSize: 11, color: isExp ? T.gold : T.faint }}>{isExp ? "▲" : "▼"}</div>
-                          </div>
-                        </div>
-                        <div style={{ fontSize: 10, color: T.ash, lineHeight: 1.5, marginBottom: 8 }}>{ex.note}</div>
-                        <div style={{ display: "flex", gap: 5 }}>
-                          {[["SER", ex.sets, T.gold], [isTimed(ex) ? "TIEMPO" : "REPS", ex.reps, T.bone], ["PAUSA", ex.rest, T.ash]].map(([lbl, val, col], j) => (
-                            <div key={j} style={{ background: T.bg, borderRadius: 7, padding: "5px 8px", flex: 1, textAlign: "center", border: `1px solid ${T.line}` }}>
-                              <div style={{ fontSize: 7, color: T.faint, letterSpacing: 1.5, fontFamily: MONO }}>{lbl}</div>
-                              <div style={{ fontSize: 11, fontFamily: GROT, fontWeight: 700, color: col }}>{val}</div>
-                            </div>
-                          ))}
-                        </div>
-                        {coachTarget && <TargetLine target={coachTarget} accent={T.gold} />}
-                        {isExp && ex.exercise_id && today && (
-                          <div style={{ marginTop: 9 }}>
-                            <SetLogger exercise={{ id: ex.exercise_id, name: ex.name }} accent={T.gold} sets={done} log={log} date={today} timed={isTimed(ex)} />
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
+              <Section title="Core al final" aside="5 a 8 min">
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>{core.map((ex) => card(ex, T.core))}</div>
+              </Section>
             )}
 
-            {sel.post_key && POST_WORKOUT[sel.post_key] && (
-              <div style={{ marginTop: 12, background: "#16201A", border: `1px solid ${T.sage}33`, borderRadius: 12, padding: "13px 15px" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
-                  <Label color={T.sage} style={{ fontSize: 9 }}>// {POST_WORKOUT[sel.post_key].titulo.toUpperCase()}</Label>
-                  <div style={{ fontSize: 8, color: T.gold, fontFamily: MONO }}>{POST_WORKOUT[sel.post_key].ventana}</div>
-                </div>
-                {POST_WORKOUT[sel.post_key].comida.map((c, ci) => (
-                  <div key={ci} style={{ fontSize: 11, color: T.bone, lineHeight: 1.9, paddingLeft: 9, borderLeft: `1px solid ${T.sage}55` }}>· {c}</div>
-                ))}
-                <div style={{ marginTop: 8, fontSize: 9, color: T.sage, fontFamily: MONO }}>{POST_WORKOUT[sel.post_key].macros}</div>
-                <div style={{ marginTop: 6, fontSize: 10, color: T.ash, lineHeight: 1.6 }}>{POST_WORKOUT[sel.post_key].razon}</div>
-              </div>
+            {pw && (
+              <Section title={pw.titulo} aside={pw.ventana}>
+                <Card>
+                  <ul style={{ listStyle: "none", display: "flex", flexDirection: "column", gap: 8 }}>
+                    {pw.comida.map((c, i) => (
+                      <li key={i} style={{ display: "flex", gap: 10, fontSize: 15, lineHeight: 1.4 }}>
+                        <span style={{ width: 6, height: 6, borderRadius: "50%", background: T.core, marginTop: 8, flexShrink: 0 }} />{c}
+                      </li>
+                    ))}
+                  </ul>
+                  <div style={{ fontSize: 13, color: T.bone, marginTop: 12 }}>{pw.macros}</div>
+                  <div style={{ fontSize: 13, color: T.ash, marginTop: 6, lineHeight: 1.5 }}>{pw.razon}</div>
+                </Card>
+              </Section>
             )}
+
             {sel.type === "strength" && (
-              <div style={{ marginTop: 10, background: T.surface, border: `1px solid ${T.line}`, borderRadius: 11, padding: "11px 13px", fontSize: 10, color: T.ash, lineHeight: 1.8 }}>
-                <span style={{ color: T.copper, fontWeight: 600 }}>Overload:</span> sube peso al lograr el max de reps con buena forma 2 sesiones seguidas.<br />
-                <span style={{ color: T.copper, fontWeight: 600 }}>Intensidad (RPE):</span> termina cada serie con 2 reps en reserva. La ultima serie de cada compuesto puede llegar a 1 en reserva.<br />
-                <span style={{ color: T.copper, fontWeight: 600 }}>Calentamiento:</span> 5 min movilidad + 1 serie ligera por compuesto.
-              </div>
+              <Section title="Como progresar">
+                <div style={{ display: "flex", flexDirection: "column", gap: 10, fontSize: 14, color: T.ash, lineHeight: 1.5 }}>
+                  <p><b style={{ color: T.bone }}>Sobrecarga.</b> Sube peso al lograr el maximo de reps con buena forma dos sesiones seguidas.</p>
+                  <p><b style={{ color: T.bone }}>Intensidad.</b> Termina cada serie con 2 reps en reserva; la ultima de cada compuesto puede quedar en 1.</p>
+                  <p><b style={{ color: T.bone }}>Calentamiento.</b> 5 min de movilidad y una serie ligera por compuesto.</p>
+                </div>
+              </Section>
             )}
           </>
         )}
@@ -546,48 +530,31 @@ const TrainingTab = ({ plan, today, recommendation }) => {
 };
 
 // ═══════════════════════════════════════════════════════════════
-// LOG TAB — any exercise, any date, history// ═══════════════════════════════════════════════════════════════
 // LOG TAB — any exercise, any date, history
 // ═══════════════════════════════════════════════════════════════
+const fieldStyle = {
+  width: "100%", minWidth: 0, height: 52, background: T.surface, border: `1.5px solid ${T.line}`, borderRadius: 14,
+  color: T.bone, padding: "0 14px", fontSize: 16, fontWeight: 500, outline: "none",
+};
+
 const NewExerciseForm = ({ initialName = "", onCreated, onCancel }) => {
   const [name, setName] = useState(initialName);
   const [group, setGroup] = useState("");
   const [error, setError] = useState(null);
   const submit = () => api("POST", "/api/exercises", { name, muscle_group: group || null }).then(onCreated).catch((e) => setError(e.message));
   return (
-    <div style={{ background: T.bg, border: `1px solid ${T.gold}55`, borderRadius: 9, padding: "10px 12px", display: "flex", flexDirection: "column", gap: 7 }}>
-      <Label color={T.gold}>// NUEVO_EJERCICIO</Label>
-      <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Nombre" style={inputStyle} />
-      <input value={group} onChange={(e) => setGroup(e.target.value)} placeholder="Grupo muscular (opcional)" style={{ ...inputStyle, fontWeight: 500, fontSize: 12 }} />
-      <div style={{ display: "flex", gap: 6 }}>
-        <Btn accent={T.gold} disabled={!name.trim()} onClick={submit}>GUARDAR</Btn>
-        <Btn ghost accent={T.ash} onClick={onCancel}>CANCELAR</Btn>
+    <Card style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <div style={{ fontSize: 15, fontWeight: 700 }}>Nuevo ejercicio</div>
+      <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Nombre" aria-label="Nombre" style={{ ...fieldStyle, background: T.bg }} />
+      <input value={group} onChange={(e) => setGroup(e.target.value)} placeholder="Grupo muscular (opcional)" aria-label="Grupo muscular" style={{ ...fieldStyle, background: T.bg }} />
+      <div style={{ display: "flex", gap: 8 }}>
+        <Btn accent={T.core} disabled={!name.trim()} onClick={submit} style={{ flex: 1 }}>Crear ejercicio</Btn>
+        <Btn variant="ghost" accent={T.ash} onClick={onCancel}>Cancelar</Btn>
       </div>
-      {error && <div style={{ fontSize: 10, color: "#D98A8A" }}>{error}</div>}
-    </div>
+      {error && <ErrorNote>{error}</ErrorNote>}
+    </Card>
   );
 };
-
-// Picker groups by movement pattern — the split the program is built on. Plan
-// exercises take the pattern of the day they belong to (Lunes empuje, Martes halar,
-// Miercoles pierna, core finishers) and lead their group in program order; the rest
-// of the catalog is classified by muscle group, with a few pulls that live under
-// "Hombros" (face pull, pajaros, remo al menton) caught by name.
-const PATTERNS = [
-  ["push", "EMPUJE", "Pecho · Hombros · Triceps"],
-  ["pull", "HALAR", "Espalda · Biceps · Rear delt"],
-  ["legs", "PIERNA", "Cuadriceps · Gluteos · Isquios · Gemelos"],
-  ["core", "CORE", "Abdomen · Lumbar"],
-  ["other", "OTROS", ""],
-];
-const PATTERN_OF_GROUP = {
-  Pecho: "push", Hombros: "push", Triceps: "push",
-  Espalda: "pull", Biceps: "pull", Trapecio: "pull",
-  Piernas: "legs", Gluteos: "legs", Isquios: "legs", Gemelos: "legs", "Cadena posterior": "legs",
-  Core: "core",
-};
-const dayPattern = (d) => (d.type === "core" ? "core" : /Pierna/.test(d.label) ? "legs" : /Halar/.test(d.label) && !/Empuje/.test(d.label) ? "pull" : /Empuje/.test(d.label) && !/Halar/.test(d.label) ? "push" : null);
-const guessPattern = (e) => (/face pull|pajaros|remo|encogimiento/i.test(e.name) ? "pull" : PATTERN_OF_GROUP[e.muscle_group] ?? "other");
 
 function pickerGroups(exercises, planDays) {
   const buckets = Object.fromEntries(PATTERNS.map(([key]) => [key, []]));
@@ -605,15 +572,15 @@ function pickerGroups(exercises, planDays) {
     }
   }
   for (const e of exercises.list) put(e, guessPattern(e), false);
-  return PATTERNS.map(([key, label, hint]) => ({ label, hint, items: buckets[key] })).filter((g) => g.items.length);
+  return PATTERNS.map(([key, label, hint]) => ({ key, label, hint, items: buckets[key] })).filter((g) => g.items.length);
 }
 
-const fold = (s) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+const fold = (s) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
 
 // Searchable picker: a text field that filters the grouped list as you type (accents
 // ignored, name or muscle group). Closed, it shows the selected exercise; typing reopens
 // it. The last row creates a new exercise, prefilled with the query when nothing matches.
-const ExercisePicker = ({ groups, value, onPick, onCreate, accent }) => {
+const ExercisePicker = ({ groups, value, onPick, onCreate }) => {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
@@ -627,7 +594,7 @@ const ExercisePicker = ({ groups, value, onPick, onCreate, accent }) => {
     return groups.map((g) => ({ ...g, items: g.items.filter(({ exercise: e }) => hit(e)) })).filter((g) => g.items.length);
   }, [groups, q]);
   const flat = visible.flatMap((g) => g.items);
-  const createLabel = q && !flat.length ? `+ crear "${query.trim()}"` : "+ nuevo ejercicio…";
+  const createLabel = q && !flat.length ? `Crear "${query.trim()}"` : "Nuevo ejercicio…";
 
   const choose = (it) => { onPick(it.value); setQuery(""); setOpen(false); };
   const create = () => { onCreate(flat.length ? "" : query.trim()); setQuery(""); setOpen(false); };
@@ -641,23 +608,26 @@ const ExercisePicker = ({ groups, value, onPick, onCreate, accent }) => {
   let idx = -1;
   return (
     <div style={{ position: "relative" }}>
-      <input value={open ? query : selected?.name ?? ""} placeholder="buscar o elegir ejercicio…"
+      <input value={open ? query : selected?.name ?? ""} placeholder="Buscar ejercicio"
         onChange={(e) => { setQuery(e.target.value); setActive(0); setOpen(true); }}
         onFocus={() => { setOpen(true); setActive(0); }} onBlur={() => { setOpen(false); setQuery(""); }} onKeyDown={onKey}
-        role="combobox" aria-expanded={open} autoComplete="off" spellCheck={false}
-        style={{ ...inputStyle, fontSize: 13, paddingRight: 28, borderColor: selected ? accent + "88" : T.line }} />
-      <div style={{ position: "absolute", right: 10, top: 10, fontSize: 10, color: open ? accent : T.faint, pointerEvents: "none" }}>{open ? "▲" : "▼"}</div>
+        role="combobox" aria-expanded={open} aria-label="Ejercicio" autoComplete="off" spellCheck={false} enterKeyHint="search"
+        style={{ ...fieldStyle, paddingLeft: 42, borderColor: selected ? T.ash : T.line, fontWeight: selected && !open ? 650 : 500 }} />
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={T.ash} strokeWidth="2" strokeLinecap="round" style={{ position: "absolute", left: 14, top: 16, pointerEvents: "none" }}>
+        <circle cx="11" cy="11" r="7" /><path d="M20 20l-4-4" />
+      </svg>
       {open && (
         // mousedown is swallowed so the input keeps focus (and the list stays open) while tapping a row
         <div onMouseDown={(e) => e.preventDefault()} role="listbox" style={{
-          position: "absolute", left: 0, right: 0, top: "calc(100% + 4px)", zIndex: 20, maxHeight: 280, overflowY: "auto",
-          background: T.raised, border: `1px solid ${accent}66`, borderRadius: 9, boxShadow: "0 10px 30px rgba(0,0,0,.5)",
+          position: "absolute", left: 0, right: 0, top: "calc(100% + 6px)", zIndex: 25, maxHeight: "55vh", overflowY: "auto",
+          background: T.raised, borderRadius: 16, boxShadow: "0 16px 40px #000A", padding: "4px 0",
         }}>
           {visible.map((g) => (
             <div key={g.label}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", padding: "8px 11px 3px", position: "sticky", top: 0, background: T.raised }}>
-                <Label color={accent}>// {g.label}</Label>
-                {g.hint && <span style={{ fontSize: 7, color: T.faint, letterSpacing: 1, fontFamily: MONO }}>{g.hint}</span>}
+              <div style={{ display: "flex", alignItems: "baseline", gap: 8, padding: "10px 14px 4px", position: "sticky", top: 0, background: T.raised }}>
+                <span style={{ width: 8, height: 8, borderRadius: "50%", background: T[g.key] ?? T.ash, alignSelf: "center" }} />
+                <span style={{ fontSize: 13, fontWeight: 700 }}>{g.label}</span>
+                {g.hint && <span style={{ fontSize: 12, color: T.ash, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.hint}</span>}
               </div>
               {g.items.map((it, j) => {
                 const i = ++idx;
@@ -666,23 +636,20 @@ const ExercisePicker = ({ groups, value, onPick, onCreate, accent }) => {
                 const firstOther = !it.plan && j > 0 && g.items[j - 1].plan;   // plan → catalog boundary
                 return (
                   <div key={it.value} role="option" aria-selected={on} onClick={() => choose(it)} onMouseEnter={() => setActive(i)} style={{
-                    display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, padding: "7px 11px", cursor: "pointer",
-                    background: on ? accent + "22" : "none", borderLeft: `2px solid ${it.value === value ? accent : "transparent"}`,
-                    borderTop: firstOther ? `1px dashed ${T.line}` : "none",
+                    display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, minHeight: 46, padding: "0 14px 0 30px", cursor: "pointer",
+                    background: on ? T.line : "none", borderTop: firstOther ? `1px solid ${T.line}` : "none",
                   }}>
-                    <span style={{ fontSize: 12, fontFamily: GROT, fontWeight: 600, color: on ? T.bone : it.plan ? "#CFC6B8" : T.ash }}>
-                      {it.plan && <span style={{ color: accent, marginRight: 6 }}>●</span>}{e.name}
-                    </span>
-                    {e.muscle_group && <span style={{ fontSize: 8, color: T.faint, letterSpacing: 1, flexShrink: 0 }}>{e.muscle_group.toUpperCase()}</span>}
+                    <span style={{ fontSize: 15, fontWeight: it.plan ? 600 : 400, color: it.plan || on ? T.bone : T.ash }}>{e.name}</span>
+                    {e.muscle_group && <span style={{ fontSize: 12, color: T.faint, flexShrink: 0 }}>{e.muscle_group}</span>}
                   </div>
                 );
               })}
             </div>
           ))}
-          {!flat.length && <div style={{ padding: "12px 11px 4px", fontSize: 10, color: T.faint, letterSpacing: 1 }}>SIN RESULTADOS</div>}
+          {!flat.length && <div style={{ padding: "14px", fontSize: 14, color: T.ash }}>Ningun ejercicio coincide.</div>}
           <div onClick={create} onMouseEnter={() => setActive(flat.length)} style={{
-            padding: "9px 11px", cursor: "pointer", fontSize: 11, fontFamily: GROT, fontWeight: 700, color: T.gold,
-            borderTop: `1px solid ${T.line}`, background: active === flat.length ? T.gold + "18" : "none",
+            minHeight: 48, display: "flex", alignItems: "center", padding: "0 14px", cursor: "pointer", fontSize: 15, fontWeight: 700, color: T.core,
+            borderTop: `1px solid ${T.line}`, background: active === flat.length ? T.line : "none",
           }}>{createLabel}</div>
         </div>
       )}
@@ -696,7 +663,7 @@ const LogTab = ({ exercises, plan, today }) => {
   const [creating, setCreating] = useState(false);
   const [history, setHistory] = useState([]);
   const log = useSets(date);
-  const accent = T.copper;
+  const accent = T.bone;
 
   useEffect(() => { if (!date && today) setDate(today); }, [date, today]);
   useEffect(() => {
@@ -722,103 +689,113 @@ const LogTab = ({ exercises, plan, today }) => {
   }, [history]);
 
   const picker = useMemo(() => pickerGroups(exercises, plan.days), [exercises.list, plan.days]);
+  const accentOf = (e) => T[guessPattern(e)] ?? T.ash;
 
-  if (!date) return <div style={{ padding: 24, textAlign: "center", color: T.faint, fontFamily: MONO, fontSize: 10 }}>cargando…</div>;
+  if (!date) return <div style={{ padding: "32px 16px", fontSize: 15, color: T.ash }}>Cargando…</div>;
 
+  const arrow = { width: 48, padding: 0, fontSize: 22 };
   return (
-    <div style={{ padding: "14px 14px 26px" }} className="fadein">
-      {/* date nav + summary */}
-      <div style={{ background: T.surface, border: `1px solid ${T.line}`, borderLeft: `3px solid ${accent}`, borderRadius: 13, padding: "12px 14px", marginBottom: 10 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-          <Btn ghost small accent={T.ash} onClick={() => setDate(shiftDate(date, -1))}>‹</Btn>
-          <div style={{ flex: 1, textAlign: "center" }}>
-            <div style={{ fontFamily: GROT, fontSize: 15, fontWeight: 700, color: T.bone, textTransform: "capitalize" }}>{fmtDate(date)}</div>
-            <Label style={{ marginTop: 2 }}>{date === today ? "HOY" : date}</Label>
+    <div style={{ padding: "16px 16px 32px" }}>
+      {/* date */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <Btn variant="ghost" accent={T.ash} aria-label="Dia anterior" onClick={() => setDate(shiftDate(date, -1))} style={arrow}>‹</Btn>
+        <div style={{ flex: 1, textAlign: "center" }}>
+          <div style={{ ...NUM, fontSize: 28, lineHeight: 1.05 }}>{fmtDay(date)}</div>
+          <div style={{ fontSize: 13, color: T.ash }}>{date === today ? "Hoy" : date}</div>
+        </div>
+        <Btn variant="ghost" accent={T.ash} aria-label="Dia siguiente" onClick={() => setDate(shiftDate(date, 1))} disabled={date >= today} style={arrow}>›</Btn>
+      </div>
+      {date !== today && <div style={{ textAlign: "center", marginTop: 6 }}><Btn variant="quiet" size="sm" accent={T.bone} onClick={() => setDate(today)}>Volver a hoy</Btn></div>}
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", marginTop: 18 }}>
+        {[["series", log.sets.length], ["ejercicios", groups.length], ["kg de volumen", fmtKg(volume(log.sets))]].map(([lbl, val]) => (
+          <div key={lbl} style={{ textAlign: "center" }}>
+            <div style={{ ...NUM, fontSize: 30, lineHeight: 1 }}>{val}</div>
+            <div style={{ fontSize: 13, color: T.ash, marginTop: 4 }}>{lbl}</div>
           </div>
-          <Btn ghost small accent={T.ash} onClick={() => setDate(shiftDate(date, 1))} disabled={date >= today}>›</Btn>
-          {date !== today && <Btn small accent={accent} onClick={() => setDate(today)}>HOY</Btn>}
-        </div>
-        <div style={{ display: "flex", gap: 5 }}>
-          {[["SERIES", log.sets.length, accent], ["EJERCICIOS", groups.length, T.bone], ["VOLUMEN KG", fmtKg(volume(log.sets)), T.gold]].map(([lbl, val, col]) => (
-            <div key={lbl} style={{ background: T.bg, borderRadius: 7, padding: "6px 8px", flex: 1, textAlign: "center", border: `1px solid ${T.line}` }}>
-              <div style={{ fontSize: 7, color: T.faint, letterSpacing: 1.5, fontFamily: MONO }}>{lbl}</div>
-              <div style={{ fontSize: 14, fontFamily: GROT, fontWeight: 700, color: col }}>{val}</div>
-            </div>
-          ))}
-        </div>
+        ))}
       </div>
 
       {/* add */}
-      <div style={{ background: T.surface, border: `1px solid ${T.line}`, borderRadius: 12, padding: "11px 12px", marginBottom: 12, display: "flex", flexDirection: "column", gap: 8 }}>
-        <Label color={accent}>// ANADIR_SERIE</Label>
-        <ExercisePicker groups={picker} value={exerciseId} accent={accent}
-          onPick={(v) => { setCreating(false); setExerciseId(v); }}
-          onCreate={(name) => { setExerciseId(""); setCreating(name || true); }} />
-        {creating && (
-          <NewExerciseForm key={creating} initialName={creating === true ? "" : creating} onCancel={() => setCreating(false)}
-            onCreated={async (e) => { await exercises.refresh(); setExerciseId(String(e.id)); setCreating(false); }} />
-        )}
-        {selected && (
-          <div style={{ display: "flex", gap: 10, alignItems: "stretch" }}>
-            <div style={{ flexShrink: 0, width: 72, background: T.bg, borderRadius: 9, border: `1px solid ${accent}26`, padding: 3, overflow: "hidden" }}>
-              <ExerciseImage exercise={selected} accent={accent} />
-            </div>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <SetLogger key={selected.id + date} exercise={selected} accent={accent} sets={log.sets.filter((s) => s.exercise_id === selected.id)} log={log} date={date} />
-            </div>
+      <Section title="Anadir serie" style={{ marginTop: 24 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <ExercisePicker groups={picker} value={exerciseId}
+            onPick={(v) => { setCreating(false); setExerciseId(v); }}
+            onCreate={(name) => { setExerciseId(""); setCreating(name || true); }} />
+          {creating && (
+            <NewExerciseForm key={creating} initialName={creating === true ? "" : creating} onCancel={() => setCreating(false)}
+              onCreated={async (e) => { await exercises.refresh(); setExerciseId(String(e.id)); setCreating(false); }} />
+          )}
+          {selected && (
+            <Card accent={accentOf(selected)} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+                <div style={{ width: 64, height: 52, flexShrink: 0, borderRadius: 12, background: T.bg, padding: 3, overflow: "hidden" }}>
+                  <ExerciseImage exercise={selected} accent={accentOf(selected)} />
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 16, fontWeight: 650, lineHeight: 1.25 }}>{selected.name}</div>
+                  {selected.muscle_group && <div style={{ fontSize: 13, color: T.ash, marginTop: 2 }}>{selected.muscle_group}</div>}
+                </div>
+              </div>
+              <SetLogger key={selected.id + date} exercise={selected} accent={accentOf(selected)} sets={log.sets.filter((s) => s.exercise_id === selected.id)} log={log} date={date} />
+            </Card>
+          )}
+          {exercises.error && <ErrorNote>{exercises.error}</ErrorNote>}
+        </div>
+      </Section>
+
+      {/* the day's groups */}
+      <Section title={date === today ? "Series de hoy" : "Series del dia"}>
+        {groups.length === 0 ? (
+          <p style={{ fontSize: 15, color: T.ash, lineHeight: 1.5 }}>Todavia no hay series este dia. Busca un ejercicio arriba para registrar la primera.</p>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {groups.map(({ exercise, sets }) => (
+              <Card key={exercise.id} accent={accentOf(exercise)} style={{ padding: 14 }}>
+                <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 10 }}>
+                  <div style={{ width: 52, height: 42, flexShrink: 0, borderRadius: 10, background: T.bg, padding: 2, overflow: "hidden" }}>
+                    <ExerciseImage exercise={exercise} accent={accentOf(exercise)} />
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 15, fontWeight: 650, lineHeight: 1.25 }}>{exercise.name}</div>
+                    <div style={{ fontSize: 13, color: T.ash, marginTop: 2 }}>
+                      {sets.every((s) => s.duration_s)
+                        ? `${sets.length} series, max ${Math.max(...sets.map((s) => s.duration_s))} s`
+                        : `${sets.length} series, ${fmtKg(volume(sets))} kg, max ${Math.max(...sets.map((s) => s.load_kg))} kg`}
+                    </div>
+                  </div>
+                  <Btn variant="ghost" size="sm" accent={T.bone} aria-label={`Anadir serie de ${exercise.name}`}
+                    onClick={() => { setCreating(false); setExerciseId(String(exercise.id)); window.scrollTo({ top: 0, behavior: "smooth" }); }}>Anadir</Btn>
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  {sets.map((s) => <SetChip key={s.id} set={s} accent={accentOf(exercise)} onRemove={() => log.remove(s.id)} />)}
+                </div>
+              </Card>
+            ))}
           </div>
         )}
-        {exercises.error && <div style={{ fontSize: 10, color: "#D98A8A" }}>{exercises.error}</div>}
-      </div>
-
-      {/* today's groups */}
-      {groups.length === 0 ? (
-        <div style={{ textAlign: "center", padding: "18px 0", color: T.faint, fontFamily: MONO, fontSize: 10, letterSpacing: 1 }}>SIN SERIES REGISTRADAS</div>
-      ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {groups.map(({ exercise, sets }) => (
-            <div key={exercise.id} style={{ background: T.surface, border: `1px solid ${T.line}`, borderRadius: 12, padding: "10px 12px" }}>
-              <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 8 }}>
-                <div style={{ flexShrink: 0, width: 56, height: 44, background: T.bg, borderRadius: 8, border: `1px solid ${accent}26`, padding: 2, overflow: "hidden" }}>
-                  <ExerciseImage exercise={exercise} accent={accent} />
-                </div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 12, fontWeight: 600, color: T.bone, fontFamily: GROT, lineHeight: 1.3 }}>{exercise.name}</div>
-                  <div style={{ fontSize: 9, color: T.ash, fontFamily: MONO, marginTop: 2 }}>
-                    {sets.every((s) => s.duration_s)
-                      ? `${sets.length} series · max ${Math.max(...sets.map((s) => s.duration_s))} s`
-                      : `${sets.length} series · ${fmtKg(volume(sets))} kg · max ${Math.max(...sets.map((s) => s.load_kg))} kg`}
-                  </div>
-                </div>
-                <Btn ghost small accent={accent} onClick={() => { setCreating(false); setExerciseId(String(exercise.id)); window.scrollTo({ top: 0, behavior: "smooth" }); }}>+</Btn>
-              </div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
-                {sets.map((s) => <SetChip key={s.id} set={s} accent={accent} onRemove={() => log.remove(s.id)} />)}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
+      </Section>
 
       {/* history */}
       {byDay.length > 0 && (
-        <div style={{ marginTop: 16 }}>
-          <Label style={{ fontSize: 9, marginBottom: 8 }}>// HISTORIAL_60D</Label>
-          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            {byDay.map((d) => (
-              <div key={d.date} onClick={() => setDate(d.date)} style={{
-                display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer",
-                background: d.date === date ? T.raised : T.surface, border: `1px solid ${d.date === date ? accent + "66" : T.line}`,
-                borderRadius: 9, padding: "8px 12px",
-              }}>
-                <div style={{ fontFamily: GROT, fontSize: 12, fontWeight: 700, color: T.bone, textTransform: "capitalize" }}>{fmtDate(d.date)}</div>
-                <div style={{ fontSize: 9, color: T.ash, fontFamily: MONO }}>
-                  {d.exercises} ej · {d.sets.length} series · <span style={{ color: T.gold }}>{fmtKg(volume(d.sets))} kg</span>
-                </div>
-              </div>
-            ))}
+        <Section title="Ultimos 60 dias">
+          <div style={{ display: "flex", flexDirection: "column" }}>
+            {byDay.map((d) => {
+              const on = d.date === date;
+              return (
+                <button key={d.date} type="button" onClick={() => setDate(d.date)} aria-current={on ? "date" : undefined} style={{
+                  display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, minHeight: 52, padding: "0 12px",
+                  background: on ? T.surface : "none", border: "none", borderBottom: `1px solid ${T.line}`, borderRadius: on ? 12 : 0, textAlign: "left",
+                }}>
+                  <span style={{ fontSize: 15, fontWeight: 600 }}>{fmtDay(d.date)}</span>
+                  <span style={{ fontSize: 13, color: T.ash }}>
+                    {d.exercises} ej, {d.sets.length} series, <span style={{ ...NUM, fontSize: 16, color: T.bone }}>{fmtKg(volume(d.sets))}</span> kg
+                  </span>
+                </button>
+              );
+            })}
           </div>
-        </div>
+        </Section>
       )}
     </div>
   );
@@ -827,6 +804,8 @@ const LogTab = ({ exercises, plan, today }) => {
 // ═══════════════════════════════════════════════════════════════
 // ROOT
 // ═══════════════════════════════════════════════════════════════
+const TABS = [["entreno", "Hoy"], ["registro", "Registro"], ["dash", "Cuerpo"], ["nutricion", "Comida"]];
+
 export default function PlanRecomp() {
   const [tab, setTab] = useState("entreno");
   const [today, setToday] = useState(null);
@@ -839,64 +818,32 @@ export default function PlanRecomp() {
   useEffect(() => { setToday(localDate()); }, []);
 
   return (
-    <div style={{ fontFamily: MONO, background: T.bg, minHeight: "100vh", color: T.bone }}>
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=JetBrains+Mono:wght@400;600&display=swap');
-        *{box-sizing:border-box;margin:0;padding:0}
-        body{background:${T.bg}}
-        ::-webkit-scrollbar{width:4px;height:4px}::-webkit-scrollbar-track{background:#14110F}::-webkit-scrollbar-thumb{background:#3A332B;border-radius:2px}
-        button,input,select{font-family:inherit}
-        input:focus,select:focus{border-color:${T.copper}!important}
-        input::placeholder{color:${T.faint};font-weight:500}
-        select option,select optgroup{background:${T.surface};color:${T.bone}}
-        input[type=number]::-webkit-inner-spin-button,input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none}
-        input[type=number]{-moz-appearance:textfield}
-        .exsvg svg{width:100%;height:100%;display:block}
-        .fadein{animation:fi .3s ease}
-        @keyframes fi{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
-        @media (prefers-reduced-motion: reduce){ *{animation:none!important;transition:none!important} }
-      `}</style>
+    <div style={{ background: T.bg, minHeight: "100vh", color: T.bone }}>
+      <GlobalStyle />
 
-      <div style={{ padding: "18px 16px 0", borderBottom: `1px solid ${T.line}`, background: T.bg, position: "sticky", top: 0, zIndex: 10 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 12 }}>
-          <div>
-            <div style={{ fontSize: 8, letterSpacing: 3, color: T.faint, marginBottom: 3 }}>// BODY_RECOMP — JF</div>
-            <div style={{ fontFamily: GROT, fontSize: 24, fontWeight: 700, lineHeight: 0.95, letterSpacing: "-0.5px", color: T.bone }}>
-              RECOMP<span style={{ color: T.copper }}>_</span>v3
-            </div>
+      <header style={{ position: "sticky", top: 0, zIndex: 20, background: T.bg + "F2", backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)", paddingTop: "env(safe-area-inset-top)" }}>
+        <div style={{ maxWidth: 640, margin: "0 auto", padding: "12px 16px 10px", display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ ...NUM, fontSize: 24, lineHeight: 1 }}>Recomp</div>
+            <div style={{ fontSize: 13, color: T.ash, marginTop: 3, minHeight: 16 }}>{today ? fmtDay(today) : ""}</div>
           </div>
-          <div style={{ textAlign: "right", fontSize: 9, color: T.ash, lineHeight: 1.6 }}>
-            <div>
-              {latest?.weight_kg != null && <><span style={{ color: T.gold }}>{Number(latest.weight_kg).toFixed(1)}</span> kg</>}
-              {latest?.weight_kg != null && latest?.body_fat_pct != null && " · "}
-              {latest?.body_fat_pct != null && <><span style={{ color: T.copper }}>{Number(latest.body_fat_pct).toFixed(1)}</span>%</>}
-              {!latest && <span style={{ color: T.faint }}>sin medicion</span>}
-            </div>
-            <div style={{ color: T.faint }}>obj: 16% en 12 sem</div>
-          </div>
+          <button type="button" onClick={() => setTab("dash")} aria-label="Ver mediciones" style={{ background: "none", border: "none", textAlign: "right", padding: 0 }}>
+            {latest?.weight_kg != null
+              ? <div style={{ ...NUM, fontSize: 24, lineHeight: 1 }}>{Number(latest.weight_kg).toFixed(1)}<span style={unit}> kg</span></div>
+              : <div style={{ fontSize: 13, color: T.ash }}>Sin medicion</div>}
+            {latest?.body_fat_pct != null && <div style={{ fontSize: 13, color: T.ash, marginTop: 3 }}>{Number(latest.body_fat_pct).toFixed(1)} % grasa, meta 16 %</div>}
+          </button>
         </div>
-        <div style={{ display: "flex" }}>
-          {[["dash", "TELEMETRIA"], ["entreno", "ENTRENO"], ["registro", "REGISTRO"], ["nutricion", "NUTRICION"]].map(([t, lbl]) => (
-            <button key={t} onClick={() => setTab(t)} style={{
-              flex: 1, background: "none", border: "none", cursor: "pointer", padding: "9px 2px",
-              fontSize: 9.5, letterSpacing: 1.5, transition: "all .2s",
-              color: tab === t ? T.copper : T.faint,
-              borderBottom: tab === t ? `2px solid ${T.copper}` : `2px solid transparent`,
-            }}>{lbl}</button>
-          ))}
-        </div>
-      </div>
+      </header>
 
-      <div key={tab}>
+      <main key={tab} className="fade" style={{ maxWidth: 640, margin: "0 auto", paddingBottom: "calc(84px + env(safe-area-inset-bottom))" }}>
         {tab === "dash" ? <DashboardTab measurements={measurements.rows} sessionsPerWeek={sessionsPerWeek} error={measurements.error} />
           : tab === "entreno" ? <TrainingTab plan={plan} today={today} recommendation={recommendation} />
           : tab === "registro" ? <LogTab exercises={exercises} plan={plan} today={today} />
           : <NutritionTab />}
-      </div>
+      </main>
 
-      <div style={{ padding: "10px 18px 26px", textAlign: "center", fontSize: 8, color: T.faint, letterSpacing: 2 }}>
-        {latest ? `DATA ${latest.measured_on.slice(8)}/${latest.measured_on.slice(5, 7)} · PLAN Y MEDICIONES DESDE LA BASE DE DATOS` : "SIN MEDICIONES REGISTRADAS"}
-      </div>
+      <BottomNav tabs={TABS} tab={tab} onTab={setTab} accent={T.bone} />
     </div>
   );
 }

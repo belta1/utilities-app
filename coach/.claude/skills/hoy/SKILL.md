@@ -18,6 +18,10 @@ description: Que toca hoy — la sesion del plan para hoy (o una fecha / dia dad
    - `repetir carga` — 15–28 days since the last time; win the reps back before adding kg.
    - `rango a 15–17 reps` / `+5 s` — the load cannot move (bodyweight, minimum plate), so
      the prescription moves instead.
+   - `peso corporal … reps a 12 c/lado` — bodyweight with no load: there is never a kg
+     target, only reps; the plan's range moves when he holds the top with margin.
+   - `ultima sesion ya mas ligera` — he already dropped the load himself; rebuild from it,
+     no second deload.
    - `4ª serie` — trained regularly but the e1RM is flat: more volume at the same load.
    Lines marked `plan:` are changes to the plan itself, not just to today's target.
 4. **Weekly coverage / substitution.** `hoy` prints `cobertura semana` (empuje/halar/pierna/
@@ -32,6 +36,9 @@ description: Que toca hoy — la sesion del plan para hoy (o una fecha / dia dad
 5. Add, at the end and once: the post-workout meal (`POST_WORKOUT[<post_key>]` in
    /app/pages/_lib/recomp/data.jsx — `hoy` prints the key, of the substituted day when there
    is one) and, on a Friday, which rotation week it is (`hoy` prints Semana A/B).
+   **Friday = Monday's or Tuesday's session in full**: `hoy` prints `⚑ ROTACION VIERNES
+   (Semana A|B) → <dia>` and the checklist is already that day's. `--guardar` makes the
+   dashboard open lunes / martes. Only pass `--day viernes` if he asks for the old Friday slots.
 6. If sets are already logged today, show them and continue from there — don't restart.
 7. When he agrees with the rebalance (or after you adjusted one with `api PUT …/target`),
    run `hoy --guardar`. That writes the targets **and** the `plan:` lines into the plan

@@ -294,7 +294,7 @@ still rendering its own hard-coded copy of the plan).
 | Tab | What it does |
 |---|---|
 | **TELEMETRIA** | Body composition from `body_measurements`: weight sparkline, a card per metric with its change since the previous measurement, and the 12-week goal bars. Empty until the first measurement is written (see the `medicion` coach skill). |
-| **ENTRENO** | The weekly plan, from `plan_days` / `plan_exercises`. Tap an exercise card to open it: log `kg × reps` right there, see the sets done today as chips, "ultima vez" shows the previous session's sets, and the badge shows sets done vs planned (`2/4`). The load ladder and execution steps below the logger belong to the exercise, so a swap brings its own. |
+| **ENTRENO** | The weekly plan, from `plan_days` / `plan_exercises`. Tap an exercise card to open it: log `kg × reps` right there, see the sets done today as chips, HISTORIAL lists the last 4 sessions of that exercise (any day it was done, newest first; the newest prefills the form), the phone keyboard's Go/Enter adds the set, and the badge shows sets done vs planned (`2/4`). The load ladder and execution steps below the logger belong to the exercise, so a swap brings its own. |
 | **REGISTRO** | Free-form log for any date. Type to search (accents ignored, any word order) or pick from the list — grouped by movement pattern (**EMPUJE**, **HALAR**, **PIERNA**, **CORE**; plan exercises first, marked ●), or **+ nuevo ejercicio**, add sets, delete with ✕. Shows sets / exercises / volume for the day, sets grouped by exercise, and a 60-day history — tap a day to jump to it. |
 | **NUTRICION** | Weekly meal plan and supplements (unchanged from v2) |
 
@@ -632,7 +632,7 @@ text works too — it recognizes what you mean and uses the same tools.
 
 | You say | What it does | Behind the scenes |
 |---|---|---|
-| `/hoy` · "¿qué toca hoy?" · "¿qué hago el martes?" | The session for today's plan day (or the day you name), as a checklist: exercise → **target load × reps × series** → one cue, then the post-workout meal. On Fridays it says which rotation week it is. | Runs `hoy`: reads the plan from `GET /api/plan/:day`, the last sessions of each exercise from `GET /api/exercises/:id/sessions`, and rebalances load, reps/seconds and sets per exercise (rules below). |
+| `/hoy` · "¿qué toca hoy?" · "¿qué hago el martes?" | The session for today's plan day (or the day you name), as a checklist: exercise → **target load × reps × series** → one cue, then the post-workout meal. On Fridays it uses the rotation: Semana A (even ISO week) = Monday's session, Semana B = Tuesday's, and `--guardar` makes the dashboard open that day ("ROTACION VIERNES"). | Runs `hoy`: reads the plan from `GET /api/plan/:day`, the last sessions of each exercise from `GET /api/exercises/:id/sessions`, and rebalances load, reps/seconds and sets per exercise (rules below). |
 | "ok, guarda los objetivos" · "de acuerdo" | Writes the targets so the training tab shows **OBJETIVO** on each card, and applies any change to the prescription itself (series, reps, seconds) to the plan. | `hoy --guardar` → `PUT /api/exercises/:id/target` (`set_by: hoy`) + `PATCH /api/plan/exercises/:slot`. |
 | `/cambiar` · "cambia el remo con barra por remo en máquina" · "saca el peso muerto del miércoles" · "agrega face pull el viernes" | Confirms the slot and the replacement in one line, swaps it, then recomputes the target. **Visible on the dashboard immediately** — the card picks up the new exercise's figure, its CARGA ladder and its execution steps, because those live on the exercise. | `plan <día>` → `plan cambiar <slot> <ejercicio>` (`PATCH /api/plan/exercises/:slot`), then `hoy --day <día> --guardar`. |
 | `/medicion` + a Samsung Health screenshot · "me pesé, 77.8" | Reads weight, body fat, skeletal muscle, BMI, BMR and body water off the image, asks **¿confirmo?**, writes one row for that date, and shows the change vs the previous measurement. It appears on the TELEMETRIA tab. It will not change any load because of a measurement. | `medir <fecha> peso=… grasa=… …` → `PUT /api/measurements` (upsert on the date). Also updates `data/PROFILE.md`. |
@@ -686,8 +686,19 @@ Then, on regular training (a session within the last two weeks):
    sets or fewer → same load, one more set (written into the plan).
 6. Otherwise **repeat** the load and add reps.
 
+A last session already ≥ 5 % lighter than the recent peak (a lighter Friday he chose) is
+not stacked with another deload: the target rebuilds from that load.
+
+**Bodyweight with no load** (dead bug, crunches, leg raises) never gets a kg target: the
+rep range in the plan is what moves. Every set at the top with margin (RIR ≥ 2, or no RIR
+and the previous session also topped) → the range's top becomes worst set + 2; at the top
+without margin → the range follows what he did; below or inside → repeat. Bodyweight
+*with* a load on it (fondos con mancuerna en el regazo) uses the weighted rules, 2.5 kg steps.
+
 Steps: +2.5 kg barbell / cable / machine, +1 kg per dumbbell. Timed sets (planks) climb
-5 s per session and, once the top of the range is held, the range itself moves up 5 s.
+5 s per session and, once the top of the range is held, the range in the plan moves to
+start at what he holds (rounded down to 5 s, same width) — so a plan left far behind
+catches up in one step.
 e1RM is only trusted up to 12 reps: on higher-rep ranges the reps are the target and the
 load stays put. Every rule is a fixed point — running `hoy --guardar` twice changes
 nothing the second time. Target effort is RIR 2; the last set of a compound may go to 1. `hoy` prints the rule it applied next

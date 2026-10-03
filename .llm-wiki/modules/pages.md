@@ -1,5 +1,5 @@
 ---
-updated: 2026-09-25
+updated: 2026-10-03
 covers: [pages, ui, react, hydration]
 status: current
 ---
@@ -48,6 +48,11 @@ One `.jsx` = one route. Served by [server](server.md), compiled by [jsx](jsx.md)
   `/api/recommendation?date=today`; when present, the Training tab shows a `T.gold` banner and
   auto-opens the recommended plan day instead of the calendar weekday (the day strip still lets
   the user switch back). Written by the coach's `hoy` — see [coach](coach.md), [glossary](../glossary.md).
+  `kind === "rotation"` (Friday → lunes/martes) labels the banner "ROTACION VIERNES".
+- **`SetLogger`** (used by ENTRENO cards and REGISTRO) is a `<form>`: the phone's Go/Enter
+  submits (`Btn` takes `type`, default `"button"` — only `+ S#` is `submit`). Its HISTORIAL
+  comes from `useRecentSessions` → `GET /api/exercises/:id/sessions?before=&limit=4`, and the
+  newest session prefills the inputs.
 
 ## Related
 

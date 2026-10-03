@@ -150,17 +150,18 @@ const TargetLine = ({ target, accent }) => (
   </div>
 );
 
-// Most recent earlier session for an exercise (for "ultima vez" and prefill).
-function useLastSession(exerciseId, before) {
-  const [last, setLast] = useState(null);
+// Last few earlier sessions of an exercise, newest first — any day it was done, whatever
+// plan day it belonged to. The first one prefills the logger; all of them are the history.
+function useRecentSessions(exerciseId, before, limit = 4) {
+  const [sessions, setSessions] = useState([]);
   useEffect(() => {
-    setLast(null);
+    setSessions([]);
     if (!exerciseId || !before) return;
     let live = true;
-    api("GET", `/api/exercises/${exerciseId}/last?before=${before}`).then((r) => live && setLast(r)).catch(() => {});
+    api("GET", `/api/exercises/${exerciseId}/sessions?before=${before}&limit=${limit}`).then((r) => live && setSessions(r)).catch(() => {});
     return () => { live = false; };
-  }, [exerciseId, before]);
-  return last;
+  }, [exerciseId, before, limit]);
+  return sessions;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -189,14 +190,14 @@ const inputStyle = {
 const NumField = ({ label, value, onChange, placeholder, step = 1, accent }) => (
   <label style={{ flex: 1, minWidth: 0 }}>
     <Label style={{ marginBottom: 4 }}>{label}</Label>
-    <input type="number" inputMode="decimal" step={step} min={0} value={value} placeholder={placeholder}
+    <input type="number" inputMode="decimal" enterKeyHint="go" step={step} min={0} value={value} placeholder={placeholder}
       onChange={(e) => onChange(e.target.value)}
       style={{ ...inputStyle, borderColor: value ? accent + "88" : T.line }} />
   </label>
 );
 
-const Btn = ({ children, onClick, accent = T.copper, disabled, small, ghost, style }) => (
-  <button onClick={onClick} disabled={disabled} style={{
+const Btn = ({ children, onClick, accent = T.copper, disabled, small, ghost, style, type = "button" }) => (
+  <button type={type} onClick={onClick} disabled={disabled} style={{
     background: ghost ? "none" : disabled ? T.raised : accent, color: ghost ? accent : disabled ? T.faint : T.bg,
     border: ghost ? `1px solid ${accent}66` : "none", borderRadius: 8, cursor: disabled ? "default" : "pointer",
     padding: small ? "5px 9px" : "9px 14px", fontFamily: GROT, fontWeight: 700, fontSize: small ? 11 : 13,
@@ -225,7 +226,8 @@ const SetLogger = ({ exercise, accent, sets, log, date, timed = false }) => {
   const [kg, setKg] = useState("");
   const [n, setN] = useState("");
   const [modeChoice, setMode] = useState(null);
-  const last = useLastSession(exercise.id, date);
+  const history = useRecentSessions(exercise.id, date);
+  const last = history[0] ?? null;
   const prev = sets[sets.length - 1] ?? last?.sets?.[last.sets.length - 1];
   const mode = modeChoice ?? (prev ? (prev.duration_s ? "time" : "reps") : timed ? "time" : "reps");
   const prevN = prev ? (mode === "time" ? prev.duration_s : prev.reps) : null;
@@ -235,40 +237,46 @@ const SetLogger = ({ exercise, accent, sets, log, date, timed = false }) => {
   const rirVal = rir === "" ? null : Number(rir);
   const ok = Number.isFinite(kgVal) && kgVal >= 0 && Number.isInteger(nVal) && nVal > 0 && (rirVal === null || (Number.isInteger(rirVal) && rirVal >= 0 && rirVal <= 5));
   const submit = () => log.add({ exercise_id: exercise.id, load_kg: kgVal, [mode === "time" ? "duration_s" : "reps"]: nVal, rir: rirVal });
+  // A form, so the phone keyboard's Go / Enter adds the set like the + button does.
+  const onSubmit = (e) => { e.preventDefault(); if (ok && !log.busy) submit(); };
 
   return (
     <div style={{ background: T.bg, border: `1px solid ${accent}55`, borderRadius: 9, padding: "10px 12px" }} onClick={(e) => e.stopPropagation()}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 7 }}>
-        <Label color={accent}>// REGISTRO_HOY</Label>
-        {last && (
-          <div style={{ fontSize: 9, color: T.ash, fontFamily: MONO }}>
-            ultima vez {fmtDate(last.performed_on)}: <span style={{ color: T.bone }}>{last.sets.map(fmtSet).join(" · ")}</span>
-          </div>
-        )}
-      </div>
+      <Label color={accent} style={{ marginBottom: 7 }}>// REGISTRO_HOY</Label>
+      {history.length > 0 && (
+        <div style={{ marginBottom: 8, padding: "6px 8px", background: T.surface, borderRadius: 7, display: "flex", flexDirection: "column", gap: 2 }}>
+          <Label style={{ fontSize: 7, marginBottom: 2 }}>// HISTORIAL</Label>
+          {history.map((h, i) => (
+            <div key={h.performed_on} style={{ display: "flex", gap: 8, fontSize: 9, fontFamily: MONO, lineHeight: 1.5 }}>
+              <span style={{ flexShrink: 0, width: 78, whiteSpace: "nowrap", color: i === 0 ? accent : T.faint }}>{fmtDate(h.performed_on)}</span>
+              <span style={{ minWidth: 0, color: i === 0 ? T.bone : T.ash, overflowWrap: "anywhere" }}>{h.sets.map(fmtSet).join(" · ")}</span>
+            </div>
+          ))}
+        </div>
+      )}
       {sets.length > 0 && (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 8 }}>
           {sets.map((s) => <SetChip key={s.id} set={s} accent={accent} onRemove={() => log.remove(s.id)} />)}
         </div>
       )}
-      <div style={{ display: "flex", gap: 7, alignItems: "flex-end" }}>
+      <form onSubmit={onSubmit} style={{ display: "flex", gap: 7, alignItems: "flex-end" }}>
         <NumField label="CARGA KG" value={kg} onChange={setKg} placeholder={prev ? String(prev.load_kg) : mode === "time" ? "0" : "kg"} step={0.5} accent={accent} />
         <NumField label={mode === "time" ? "SEGUNDOS" : "REPS"} value={n} onChange={setN} placeholder={prevN != null ? String(prevN) : mode === "time" ? "seg" : "reps"} accent={accent} />
         {mode === "reps" && (
           <label style={{ flex: "0 0 46px", minWidth: 0 }} title="Reps en reserva al terminar la serie (0 = fallo)">
             <Label style={{ marginBottom: 4 }}>RIR</Label>
-            <input type="number" inputMode="numeric" min={0} max={5} value={rir} placeholder="–" onChange={(e) => setRir(e.target.value)}
+            <input type="number" inputMode="numeric" enterKeyHint="go" min={0} max={5} value={rir} placeholder="–" onChange={(e) => setRir(e.target.value)}
               style={{ ...inputStyle, padding: "8px 6px", textAlign: "center", borderColor: rir !== "" ? accent + "88" : T.line }} />
           </label>
         )}
-        <button onClick={() => { setMode(mode === "time" ? "reps" : "time"); setN(""); setRir(""); }} title="Cambiar reps / segundos" style={{
+        <button type="button" onClick={() => { setMode(mode === "time" ? "reps" : "time"); setN(""); setRir(""); }} title="Cambiar reps / segundos" style={{
           alignSelf: "flex-end", background: T.surface, border: `1px solid ${T.line}`, borderRadius: 8, padding: "9px 6px", cursor: "pointer",
           fontFamily: MONO, fontSize: 8, letterSpacing: 1, color: T.ash, whiteSpace: "nowrap",
         }}>
           <span style={{ color: mode === "reps" ? accent : T.faint }}>REPS</span>/<span style={{ color: mode === "time" ? accent : T.faint }}>SEG</span>
         </button>
-        <Btn accent={accent} disabled={!ok || log.busy} onClick={submit} style={{ padding: "9px 10px" }}>+ S{sets.length + 1}</Btn>
-      </div>
+        <Btn type="submit" accent={accent} disabled={!ok || log.busy} style={{ padding: "9px 10px" }}>+ S{sets.length + 1}</Btn>
+      </form>
       {log.error && <div style={{ marginTop: 6, fontSize: 10, color: "#D98A8A" }}>{log.error}</div>}
     </div>
   );
@@ -322,7 +330,7 @@ const TrainingTab = ({ plan, today, recommendation }) => {
     <div>
       {recommendation && (
         <div className="fadein" style={{ margin: "12px 16px 0", padding: "10px 12px", background: T.gold + "14", border: `1px solid ${T.gold}44`, borderLeft: `3px solid ${T.gold}`, borderRadius: 10 }}>
-          <div style={{ fontSize: 8, letterSpacing: 2, fontFamily: MONO, color: T.gold, marginBottom: 4 }}>// HOY SUGERIDO</div>
+          <div style={{ fontSize: 8, letterSpacing: 2, fontFamily: MONO, color: T.gold, marginBottom: 4 }}>{recommendation.kind === "rotation" ? "// ROTACION VIERNES" : "// HOY SUGERIDO"}</div>
           <div style={{ fontFamily: GROT, fontSize: 13, fontWeight: 700, color: T.bone, lineHeight: 1.1 }}>{plan.days.find((d) => d.key === recommendation.plan_key)?.label ?? recommendation.title}</div>
           <div style={{ fontSize: 9.5, color: T.ash, lineHeight: 1.5, marginTop: 4, overflowWrap: "anywhere" }}>{recommendation.reason}</div>
         </div>

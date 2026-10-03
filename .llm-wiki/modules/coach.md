@@ -1,5 +1,5 @@
 ---
-updated: 2026-09-25
+updated: 2026-10-03
 covers: [coach, agent, cli]
 status: current
 ---
@@ -35,6 +35,11 @@ JF's strength coach. It is a *consumer* of the API — not part of the server pr
   with a gap, it substitutes the plan day that best fills it (strength beats cardio on a tie),
   rebalances that day, and — on `--guardar` — writes a `daily_recommendation` row the dashboard
   renders as "HOY sugerido". `hoy --limpiar` clears it. The weekday plan is never edited.
+- **Friday rotation:** on a `viernes` (no `--day`), `hoy` uses `lunes` (Semana A, even ISO
+  week) or `martes` (Semana B) in full and writes a `daily_recommendation` with
+  `kind: "rotation"`; the dashboard banner reads "ROTACION VIERNES".
+- **Bodyweight (load 0) progression** is reps-only (`bodyweight()` in `hoy.mjs`); plan rep
+  strings are rewritten with `withRange()`, which keeps suffixes like `c/lado` / `seg`.
 - The dashboard renders the DB, so anything the coach writes is live on JF's next page load.
 
 ## Gotchas & constraints

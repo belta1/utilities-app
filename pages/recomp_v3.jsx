@@ -225,7 +225,6 @@ const TargetLine = ({ target }) => (
   </div>
 );
 
-const RIR_OPTS = ["", "0", "1", "2", "3", "4", "5"];
 const loadStep = (e) => (e?.equipment === "Barra" ? 2.5 : 1);
 
 // Inline "add a set" form for one exercise. Empty fields fall back to the placeholder,
@@ -292,14 +291,11 @@ const SetLogger = ({ exercise, accent, sets, log, date, timed = false }) => {
               placeholder={prevN != null ? String(prevN) : "–"} />
           </div>
           {mode === "reps" && (
-            <div role="group" aria-label="Reps en reserva" style={{ display: "flex", alignItems: "center", gap: 4 }}>
-              <span title="Reps en reserva al terminar la serie (0 = fallo)" style={{ fontSize: 13, color: T.ash, width: 34, flexShrink: 0 }}>RIR</span>
-              {RIR_OPTS.map((v) => (
-                <button key={v || "none"} type="button" aria-pressed={rir === v} onClick={() => setRir(v)} style={{
-                  flex: 1, minWidth: 0, height: 40, borderRadius: 10, border: "none", fontSize: 15, fontWeight: 700,
-                  background: rir === v ? accent : T.bg, color: rir === v ? T.bg : T.ash,
-                }}>{v === "" ? "–" : v}</button>
-              ))}
+            // A stepper (not buttons) so RIR is part of the Carga → Reps → RIR → Go
+            // keyboard flow; half width, aligned under Carga.
+            <div style={{ display: "flex", gap: 10 }}>
+              <Stepper label="RIR" value={rir} onChange={setRir} step={1} accent={accent} inputMode="numeric" placeholder="–" />
+              <div style={{ flex: 1 }} />
             </div>
           )}
           <Btn type="submit" full accent={accent} disabled={!ok || log.busy}>{log.busy ? "Guardando…" : `Anadir serie ${sets.length + 1}`}</Btn>

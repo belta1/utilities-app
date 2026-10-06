@@ -103,7 +103,7 @@ export const Stepper = ({ label, value, onChange, placeholder, step = 1, accent,
       <div style={{ display: "flex", alignItems: "stretch", height: 56, background: T.bg, borderRadius: 14, border: `1.5px solid ${value !== "" ? accent : T.line}` }}>
         <button type="button" aria-label={`menos ${label}`} onClick={() => nudge(-1)} className="press" style={btn}>−</button>
         <div style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "baseline", justifyContent: "center", gap: 3, paddingTop: 10 }}>
-          <input type="number" inputMode={inputMode} enterKeyHint="go" step={step} min={0} value={value} placeholder={placeholder}
+          <input type="number" inputMode={inputMode} enterKeyHint="go" step="any" min={0} value={value} placeholder={placeholder}
             onChange={(e) => onChange(e.target.value)} aria-label={label}
             style={{ ...NUM, width: "100%", minWidth: 0, textAlign: "center", fontSize: 26, background: "none", border: "none", outline: "none", color: T.bone, padding: 0 }} />
           {unit && <span style={{ fontSize: 13, color: T.ash, flexShrink: 0 }}>{unit}</span>}

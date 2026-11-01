@@ -146,6 +146,28 @@ const SCHEMA = `
     updated_at    timestamptz NOT NULL DEFAULT now()
   );
 
+  -- What he ate: one row per meal, written by the coach after counting a plate from a
+  -- photo (the 'calorias' skill) and confirming every assumption with him. 'items' is the
+  -- breakdown [{name, grams, kcal, protein_g, carbs_g, fat_g, note}]; the totals are
+  -- derived from it by the API. 'assumptions' records what he confirmed (oil, portion,
+  -- brand) so a later correction knows what the number was built on.
+  CREATE TABLE IF NOT EXISTS food_logs (
+    id           serial PRIMARY KEY,
+    eaten_on     date NOT NULL DEFAULT current_date,
+    meal         text NOT NULL CHECK (meal IN ('desayuno','almuerzo','cena','snack','post')),
+    description  text NOT NULL,
+    items        jsonb NOT NULL DEFAULT '[]'::jsonb,
+    kcal         integer NOT NULL CHECK (kcal >= 0),
+    protein_g    numeric(6,1) NOT NULL DEFAULT 0 CHECK (protein_g >= 0),
+    carbs_g      numeric(6,1) NOT NULL DEFAULT 0 CHECK (carbs_g >= 0),
+    fat_g        numeric(6,1) NOT NULL DEFAULT 0 CHECK (fat_g >= 0),
+    confidence   text NOT NULL DEFAULT 'media' CHECK (confidence IN ('alta','media','baja')),
+    assumptions  text,
+    source       text NOT NULL DEFAULT 'foto',
+    logged_at    timestamptz NOT NULL DEFAULT now()
+  );
+  CREATE INDEX IF NOT EXISTS food_logs_date_idx ON food_logs (eaten_on, logged_at);
+
   -- What to actually train on a given date when it differs from the fixed weekly plan:
   -- a date-scoped pointer at an existing plan day, written by 'hoy' when the week's
   -- coverage is off (a missed strength/cardio day gets substituted into a light day).

@@ -19,7 +19,8 @@ The pg pool, the entire schema, and the seed. Postgres is the only runtime exter
 ## Schema (the `SCHEMA` string — there are no migrations)
 
 Tables: `exercise_images`, `exercises`, `workout_sets`, `plan_days`, `plan_exercises`,
-`body_measurements`, `exercise_targets`, `daily_recommendation`. See [glossary](../glossary.md)
+`body_measurements`, `exercise_targets`, `daily_recommendation`, `food_logs` (one row per meal:
+`items` jsonb breakdown + totals summed by the API, `confidence`, `assumptions`). See [glossary](../glossary.md)
 for what each means. `daily_recommendation` (one row per date) is a date-scoped pointer at a
 plan day, written by `hoy` when the week's coverage is off — the recurring weekday plan is
 never edited.

@@ -1,7 +1,8 @@
 // Body ("Cuerpo") and food ("Comida") tabs. The body tab renders the measurements the page
-// fetched from /api/measurements; the food tab is static content from ./data.jsx.
+// fetched from /api/measurements; the food tab is the static weekly menu from ./data.jsx,
+// topped by what was actually eaten today (/api/food, written by the coach from photos).
 // Style: "Goma y tiza" — see ./tokens.jsx and ./kit.jsx.
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { T, NUM } from "./tokens.jsx";
 import { Card, Section } from "./kit.jsx";
 import { PROFILE, GOALS, SUPS, MACROS, WEEK } from "./data.jsx";
@@ -250,7 +251,94 @@ const dayColor = (i, tipo) => tipo === "fuerza" ? [T.push, T.pull, T.legs, T.bon
   : tipo === "lesmills" ? T.cardio : tipo === "recovery" ? T.recovery : T.faint;
 const SLOT_COLOR = { Desayuno: T.legs, Almuerzo: T.push, Cena: T.recovery };
 
-export const NutritionTab = () => {
+// What was eaten today, counted by the coach from photos ('calorias' skill), against the
+// daily goal. Fetched on mount, so reopening the tab shows a meal logged a minute ago.
+const MEAL_NAME = { desayuno: "Desayuno", almuerzo: "Almuerzo", cena: "Cena", snack: "Snack", post: "Post-entreno" };
+const MEAL_COLOR = { desayuno: T.legs, almuerzo: T.push, cena: T.recovery, snack: T.cardio, post: T.core };
+
+const LoggedToday = ({ today }) => {
+  const [rows, setRows] = useState(null);
+  const [error, setError] = useState(null);
+  const [open, setOpen] = useState(null);
+  useEffect(() => {
+    if (!today) return;
+    let live = true;
+    fetch(`/api/food?date=${today}`)
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((r) => live && setRows(r))
+      .catch((e) => live && setError(e.message));
+    return () => { live = false; };
+  }, [today]);
+
+  if (error) return <p style={{ padding: "12px 16px 0", fontSize: 14, color: T.danger }}>No se pudo leer lo registrado hoy ({error}).</p>;
+  if (!rows) return null;
+  const t = rows.reduce((a, m) => ({ kcal: a.kcal + m.kcal, prot: a.prot + m.protein_g, carbs: a.carbs + m.carbs_g, fat: a.fat + m.fat_g }), { kcal: 0, prot: 0, carbs: 0, fat: 0 });
+  const pct = Math.min(100, Math.round((t.kcal / MACROS.kcal) * 100));
+  const left = MACROS.kcal - t.kcal;
+
+  return (
+    <div style={{ padding: "12px 16px 4px" }}>
+      <Card>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12 }}>
+          <h2 style={{ fontSize: 13, fontWeight: 600, color: T.ash }}>Registrado hoy</h2>
+          <span style={{ fontSize: 13, color: T.ash }}>{left >= 0 ? `quedan ${left.toLocaleString("es-ES")} kcal` : `${(-left).toLocaleString("es-ES")} kcal sobre la meta`}</span>
+        </div>
+        <div style={{ ...NUM, fontSize: 36, lineHeight: 1, marginTop: 8 }}>
+          {t.kcal.toLocaleString("es-ES")}<span style={unit}> de {MACROS.kcal.toLocaleString("es-ES")} kcal</span>
+        </div>
+        <div style={{ background: T.bg, borderRadius: 5, height: 8, overflow: "hidden", marginTop: 10 }} role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label="Calorias de hoy">
+          <div style={{ width: `${pct}%`, height: "100%", background: left < 0 ? T.danger : T.bone, borderRadius: 5, transition: "width .4s ease" }} />
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 14 }}>
+          {[["proteina", t.prot, MACROS.prot, MACRO_COLORS.prot], ["carbs", t.carbs, MACROS.carbs, MACRO_COLORS.carbs], ["grasa", t.fat, MACROS.fat, MACRO_COLORS.fat]].map(([l, v, goal, col]) => (
+            <div key={l}>
+              <div style={{ ...NUM, fontSize: 22, lineHeight: 1, color: col }}>{Math.round(v)}<span style={unit}> / {goal} g</span></div>
+              <div style={{ fontSize: 13, color: T.ash, marginTop: 4 }}>{l}</div>
+            </div>
+          ))}
+        </div>
+
+        {rows.length === 0
+          ? <p style={{ fontSize: 14, color: T.ash, marginTop: 14, lineHeight: 1.5 }}>Nada registrado todavia. Mandale una foto del plato al coach y la cuenta contigo.</p>
+          : (
+            <ul style={{ listStyle: "none", marginTop: 14, borderTop: `1px solid ${T.line}` }}>
+              {rows.map((m) => {
+                const isOpen = open === m.id;
+                return (
+                  <li key={m.id} style={{ borderBottom: `1px solid ${T.line}` }}>
+                    <button type="button" aria-expanded={isOpen} onClick={() => setOpen(isOpen ? null : m.id)} style={{
+                      width: "100%", minHeight: 52, display: "flex", alignItems: "center", gap: 10, background: "none", border: "none", textAlign: "left", padding: "8px 0",
+                    }}>
+                      <span style={{ width: 10, height: 10, borderRadius: "50%", background: MEAL_COLOR[m.meal] ?? T.ash, flexShrink: 0 }} />
+                      <span style={{ flex: 1, minWidth: 0 }}>
+                        <span style={{ display: "block", fontSize: 13, color: T.ash }}>{MEAL_NAME[m.meal] ?? m.meal}{m.confidence === "baja" ? ", aproximado" : ""}</span>
+                        <span style={{ display: "block", fontSize: 15, fontWeight: 600, lineHeight: 1.3 }}>{m.description}</span>
+                      </span>
+                      <span style={{ ...NUM, fontSize: 18 }}>{m.kcal}<span style={unit}> kcal</span></span>
+                    </button>
+                    {isOpen && (
+                      <div className="open" style={{ padding: "0 0 12px 20px" }}>
+                        {m.items.map((it, j) => (
+                          <div key={j} style={{ display: "flex", justifyContent: "space-between", gap: 12, fontSize: 14, lineHeight: 1.6 }}>
+                            <span>{it.name}{it.grams != null ? `, ${Math.round(it.grams)} g` : ""}</span>
+                            <span style={{ color: T.ash, whiteSpace: "nowrap" }}>{Math.round(it.kcal)} kcal</span>
+                          </div>
+                        ))}
+                        <div style={{ fontSize: 13, color: T.ash, marginTop: 6 }}>{Math.round(m.protein_g)} g prot, {Math.round(m.carbs_g)} g carbs, {Math.round(m.fat_g)} g grasa</div>
+                        {m.assumptions && <div style={{ fontSize: 13, color: T.faint, marginTop: 4, lineHeight: 1.45 }}>{m.assumptions}</div>}
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+      </Card>
+    </div>
+  );
+};
+
+export const NutritionTab = ({ today }) => {
   const [activeDay, setActiveDay] = useState(0);
   const [showSups, setShowSups] = useState(false);
   const [expandedMeal, setExpandedMeal] = useState(null);
@@ -260,6 +348,7 @@ export const NutritionTab = () => {
 
   return (
     <div>
+      <LoggedToday today={today} />
       <div className="scrollx" style={{ display: "flex", gap: 8, overflowX: "auto", padding: "8px 16px 4px" }}>
         {WEEK.map((d, i) => {
           const on = activeDay === i;

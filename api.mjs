@@ -397,6 +397,139 @@ async function deleteMeasurement(id) {
   return { deleted: id };
 }
 
+// ── food log: meals counted from photos by the coach ─────────────
+
+const MEALS = ["desayuno", "almuerzo", "cena", "snack", "post"];
+const CONFIDENCE = ["alta", "media", "baja"];
+const FOOD_COLS = `f.id, to_char(f.eaten_on, 'YYYY-MM-DD') AS eaten_on, f.meal, f.description, f.items,
+  f.kcal, f.protein_g, f.carbs_g, f.fat_g, f.confidence, f.assumptions, f.source, f.logged_at`;
+const MEAL_ORDER = `array_position(ARRAY['desayuno','almuerzo','post','snack','cena'], f.meal)`;
+
+const asEnum = (v, name, allowed) => {
+  if (!allowed.includes(v)) throw bad(`${name} must be one of ${allowed.join(", ")}`);
+  return v;
+};
+
+// One line of the breakdown. kcal is required per item; macros default to 0 so a drink
+// counted only by its label still fits.
+function asFoodItem(it, i) {
+  if (!it || typeof it !== "object") throw bad(`items[${i}] must be an object`);
+  const out = { name: asText(it.name, `items[${i}].name`, { required: true, max: 120 }) };
+  if (!optional(it.grams)) out.grams = asNumber(it.grams, `items[${i}].grams`, { min: 0 });
+  out.kcal = asNumber(it.kcal, `items[${i}].kcal`, { min: 0 });
+  for (const k of ["protein_g", "carbs_g", "fat_g"]) out[k] = optional(it[k]) ? 0 : asNumber(it[k], `items[${i}].${k}`, { min: 0 });
+  const note = asText(it.note, `items[${i}].note`, { max: 300 });
+  if (note) out.note = note;
+  return out;
+}
+
+const r1 = (n) => Math.round(n * 10) / 10;
+
+// Totals come from the items when there are any — the breakdown is the source, so the
+// sum can never drift from it. Without items the caller must pass kcal directly.
+function foodTotals(items, body) {
+  if (items.length) {
+    const sum = (k) => items.reduce((a, it) => a + (it[k] ?? 0), 0);
+    return { kcal: Math.round(sum("kcal")), protein_g: r1(sum("protein_g")), carbs_g: r1(sum("carbs_g")), fat_g: r1(sum("fat_g")) };
+  }
+  return {
+    kcal: Math.round(asNumber(body.kcal, "kcal", { min: 0 })),
+    protein_g: optional(body.protein_g) ? 0 : asNumber(body.protein_g, "protein_g", { min: 0 }),
+    carbs_g: optional(body.carbs_g) ? 0 : asNumber(body.carbs_g, "carbs_g", { min: 0 }),
+    fat_g: optional(body.fat_g) ? 0 : asNumber(body.fat_g, "fat_g", { min: 0 }),
+  };
+}
+
+const asItems = (v) => {
+  if (optional(v)) return [];
+  if (!Array.isArray(v) || v.length > 40) throw bad("items must be an array of at most 40 entries");
+  return v.map(asFoodItem);
+};
+
+async function listFood({ date, from, to }) {
+  if (date) {
+    const { rows } = await query(`SELECT ${FOOD_COLS} FROM food_logs f WHERE f.eaten_on = $1 ORDER BY ${MEAL_ORDER}, f.logged_at, f.id`, [date]);
+    return rows;
+  }
+  if (!from || !to) throw bad("pass date=YYYY-MM-DD or from=&to=");
+  const { rows } = await query(
+    `SELECT ${FOOD_COLS} FROM food_logs f WHERE f.eaten_on BETWEEN $1 AND $2 ORDER BY f.eaten_on DESC, ${MEAL_ORDER}, f.logged_at, f.id`,
+    [from, to],
+  );
+  return rows;
+}
+
+// Per-day totals over a range, newest first — what 'comida semana' prints.
+async function foodDays(from, to) {
+  if (!from || !to) throw bad("pass from=&to=");
+  const { rows } = await query(
+    `SELECT to_char(eaten_on, 'YYYY-MM-DD') AS eaten_on, count(*)::int AS meals,
+            sum(kcal)::int AS kcal, sum(protein_g) AS protein_g, sum(carbs_g) AS carbs_g, sum(fat_g) AS fat_g
+     FROM food_logs WHERE eaten_on BETWEEN $1 AND $2 GROUP BY eaten_on ORDER BY eaten_on DESC`,
+    [from, to],
+  );
+  return rows;
+}
+
+async function createFood(body) {
+  const items = asItems(body.items);
+  const t = foodTotals(items, body);
+  const { rows } = await query(
+    `WITH ins AS (
+       INSERT INTO food_logs (eaten_on, meal, description, items, kcal, protein_g, carbs_g, fat_g, confidence, assumptions, source)
+       VALUES (COALESCE($1::date, current_date), $2, $3, $4, $5, $6, $7, $8, COALESCE($9, 'media'), $10, COALESCE($11, 'foto'))
+       RETURNING *)
+     SELECT ${FOOD_COLS} FROM ins f`,
+    [
+      asDate(body.eaten_on ?? body.date, "eaten_on"),
+      asEnum(body.meal, "meal", MEALS),
+      asText(body.description, "description", { required: true, max: 300 }),
+      JSON.stringify(items),
+      t.kcal, t.protein_g, t.carbs_g, t.fat_g,
+      optional(body.confidence) ? null : asEnum(body.confidence, "confidence", CONFIDENCE),
+      asText(body.assumptions, "assumptions", { max: 1000 }),
+      asText(body.source, "source", { max: 40 }),
+    ],
+  );
+  return rows[0];
+}
+
+// A correction ("era media palta, no una"): any field may change; passing items
+// recomputes the totals from them.
+async function updateFood(id, body) {
+  const { rows: cur } = await query(`SELECT ${FOOD_COLS} FROM food_logs f WHERE f.id = $1`, [id]);
+  if (!cur.length) throw new ApiError(404, "meal not found");
+  const old = cur[0];
+  const items = "items" in body ? asItems(body.items) : old.items;
+  const t = "items" in body || ["kcal", "protein_g", "carbs_g", "fat_g"].some((k) => k in body)
+    ? foodTotals(items, { ...old, ...body })
+    : old;
+  const { rows } = await query(
+    `WITH up AS (
+       UPDATE food_logs SET eaten_on = $2, meal = $3, description = $4, items = $5, kcal = $6, protein_g = $7,
+         carbs_g = $8, fat_g = $9, confidence = $10, assumptions = $11
+       WHERE id = $1 RETURNING *)
+     SELECT ${FOOD_COLS} FROM up f`,
+    [
+      id,
+      "eaten_on" in body ? asDate(body.eaten_on, "eaten_on") ?? old.eaten_on : old.eaten_on,
+      "meal" in body ? asEnum(body.meal, "meal", MEALS) : old.meal,
+      "description" in body ? asText(body.description, "description", { required: true, max: 300 }) : old.description,
+      JSON.stringify(items),
+      t.kcal, t.protein_g, t.carbs_g, t.fat_g,
+      "confidence" in body ? asEnum(body.confidence, "confidence", CONFIDENCE) : old.confidence,
+      "assumptions" in body ? asText(body.assumptions, "assumptions", { max: 1000 }) : old.assumptions,
+    ],
+  );
+  return rows[0];
+}
+
+async function deleteFood(id) {
+  const { rowCount } = await query("DELETE FROM food_logs WHERE id = $1", [id]);
+  if (!rowCount) throw new ApiError(404, "meal not found");
+  return { deleted: id };
+}
+
 // ── targets: what to lift next time, per exercise ─────────────────
 
 const TARGET_COLS = `t.exercise_id, e.name AS exercise_name, t.load_kg, t.reps, t.reason, t.set_by,
@@ -526,6 +659,11 @@ const routes = [
   ["GET", /^\/api\/measurements$/, (_m, q) => listMeasurements(Math.min(asNumber(q.get("limit") ?? 24, "limit", { min: 1, integer: true }), 200))],
   ["PUT", /^\/api\/measurements$/, (_m, _q, body) => putMeasurement(body)],
   ["DELETE", /^\/api\/measurements\/(\d+)$/, (m) => deleteMeasurement(Number(m[1]))],
+  ["GET", /^\/api\/food$/, (_m, q) => listFood({ date: asDate(q.get("date"), "date"), from: asDate(q.get("from"), "from"), to: asDate(q.get("to"), "to") })],
+  ["GET", /^\/api\/food\/days$/, (_m, q) => foodDays(asDate(q.get("from"), "from"), asDate(q.get("to"), "to"))],
+  ["POST", /^\/api\/food$/, (_m, _q, body) => createFood(body)],
+  ["PATCH", /^\/api\/food\/(\d+)$/, (m, _q, body) => updateFood(Number(m[1]), body)],
+  ["DELETE", /^\/api\/food\/(\d+)$/, (m) => deleteFood(Number(m[1]))],
   ["GET", /^\/api\/recommendation$/, (_m, q) => getRecommendation(asDate(q.get("date"), "date"))],
   ["PUT", /^\/api\/recommendation$/, (_m, _q, body) => putRecommendation(body)],
   ["DELETE", /^\/api\/recommendation\/(\d{4}-\d{2}-\d{2})$/, (m) => deleteRecommendation(asDate(m[1], "date"))],

@@ -26,6 +26,7 @@ to sit on a private network). Mounted by [server](server.md) via `handleApi`.
 - **Plan:** `GET /api/plan`, `GET /api/plan/:key`, `POST /api/plan/:key/exercises`,
   `PATCH/DELETE /api/plan/exercises/:id`.
 - **Measurements:** `GET /api/measurements?limit=`, `PUT /api/measurements`, `DELETE /api/measurements/:id`.
+- **Food:** `GET /api/food?date=|from=&to=`, `GET /api/food/days?from=&to=`, `POST /api/food`, `PATCH/DELETE /api/food/:id`. Totals are always summed from `items` when present (`foodTotals`); `meal`/`confidence` are enums (`asEnum`).
 - **Targets:** `GET /api/targets`, `PUT /api/exercises/:id/target`, `DELETE /api/exercises/:id/target`.
 - **Recommendation:** `GET /api/recommendation?date=`, `PUT /api/recommendation`, `DELETE /api/recommendation/:date` — the date-scoped "HOY sugerido" (validates `plan_key`/`source_key` against `plan_days`). Written by `hoy`; read by the dashboard.
 

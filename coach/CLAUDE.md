@@ -15,6 +15,7 @@ Sources of truth, in this order:
    with `plan`, change it with `plan cambiar` / `plan fijar` / `hoy --guardar`. The
    written content that is not a number — weekly menu, macros, supplements and
    `POST_WORKOUT` — still lives in `/app/pages/_lib/recomp/data.jsx`, part of the image.
+   What he actually ate is in the DB too (`food_logs`, via `comida`).
 3. **`data/PROFILE.md`** — who he is, goals, injuries, preferences. Update it when he tells you
    something durable (a new measurement, a pain, a schedule change).
 4. **`data/history/`** — earlier coaching conversations he saved (from claude.ai). Read
@@ -28,6 +29,7 @@ Sources of truth, in this order:
 | `plan` · `plan <dia>` · `plan buscar <texto>` | The plan in the DB: the days, one day's slots with their `slot=` ids, or a catalog search. |
 | `plan cambiar <slot> <id o nombre>` · `plan fijar <slot> series=3 reps=8–10 pausa=90s nota="…"` · `plan agregar <dia> <ej> [--core]` · `plan quitar <slot>` | Edit the plan. A swap carries the new exercise's figure, load ladder and execution detail; run `hoy --day <dia> --guardar` afterwards to recompute the OBJETIVO. See the `cambiar` skill. |
 | `medir` · `medir <fecha> peso=77.8 grasa=21.6 musculo=33.0 bmi=24.6 bmr=1687 agua=44.7` · `medir --borrar <id>` | Body composition, read off a Samsung Health screenshot. Upsert on the date, so a correction rewrites the row. It is what the TELEMETRIA tab shows. See the `medicion` skill. |
+| `comida [fecha]` · `comida semana [fecha]` · `comida guardar '<json>'` · `comida corregir <id> '<json>'` · `comida borrar <id>` | The food log: meals counted from a photo, each with its item breakdown, the assumptions he confirmed and a confidence (alta/media/baja). `comida` prints the day against the macro goal (`MACROS` in data.jsx) and what is left; it is what the Comida tab shows as "Registrado hoy". See the `calorias` skill. Backed by `api GET/POST /api/food`, `PATCH`/`DELETE /api/food/<id>`, `GET /api/food/days?from=&to=`. |
 | `semana [YYYY-MM-DD] [--days N] [--json]` | Weekly numbers: sessions, volume by pattern, best set and e1RM per exercise vs the previous period (▲▼), missed plan days. |
 | `api GET /api/sets?date=…` · `api GET /api/exercises` · `api GET /api/exercises/<id>/last?before=…` | Read the log. |
 | `api POST /api/sets '{"exercise_id":1,"load_kg":40,"reps":8,"rir":2,"date":"…"}'` | Log a set. `rir` (reps in reserve, 0–5) is optional but ask for it — it drives the progression. Timed set: `{"exercise_id":26,"duration_s":60}`. One of `reps` / `duration_s`; `load_kg` 0 for bodyweight; `date` defaults to today. |
@@ -56,6 +58,12 @@ dumbbells; volume = load × reps, timed sets add none.
 - **A Samsung Health screenshot** (`/medicion`, "me pesé"): read the numbers off the
   image, confirm them in one line, `medir` them in. Never invent a digit you cannot read,
   and never change loads because of a measurement — that is the log's job.
+- **A photo of food** (`/calorias`, "comí …", "cuántas calorías tiene esto"): name what
+  you see, then **ask** what the photo cannot show — cooking fat, portion (grams or a
+  reference), hidden sauces/cheese/sugar, whether he ate it all, drinks — in one numbered
+  message. Never fill a gap silently: anything left as an assumption is stated and
+  confirmed. Show the breakdown per item, ask **¿confirmo?**, then `comida guardar`. See
+  the `calorias` skill.
 - **Logging** (`/registrar` or any "hice …"): parse into sets, show the table
   (exercise · kg · reps/seg · n), ask **¿confirmo?** once, then POST each set and read
   back the day (`api GET /api/sets?date=…`) to confirm. Mid-workout, one set at a time,

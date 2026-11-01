@@ -21,7 +21,7 @@ seed/           exercise catalog, per-exercise reference material, the plan, SVG
 pages/          one .jsx = one route  (pages/foo.jsx → GET /foo, pages/a/b.jsx → /a/b)
 pages/_lib/     private modules, importable but never served (any "_" path segment)
 pages/_lib/recomp/{tokens,data,ui}.jsx   design tokens, meal/macro content, shared tabs
-coach/bin/      the coach's CLI tools (hoy, semana, plan, medir, importar, api, sql)
+coach/bin/      the coach's CLI tools (hoy, semana, plan, medir, comida, importar, api, sql)
 ```
 
 **The RECOMP data lives in Postgres, not in the page.** The plan (`plan_days` /
@@ -106,6 +106,9 @@ there is no index listing.
   the swap: it renames the slot to the catalog name unless a `name` comes with it, and
   the card's figure, CARGA block and MUSCULOS / EJECUCION follow the new exercise because
   they are columns on `exercises`.
+- `food_logs` is one row per meal, written by the coach's `calorias` skill (photo → questions →
+  confirm → `comida guardar`). `items` (jsonb) is the breakdown and the API always sums the totals
+  from it; the macro goal stays `MACROS` in `data.jsx`, which `coach/bin/comida.mjs` reads as text.
 - `body_measurements` is upserted on `measured_on`, and `GET /api/measurements` returns
   **oldest first** (the sparkline's order) — the only endpoint that does.
 

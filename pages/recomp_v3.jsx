@@ -836,7 +836,7 @@ export default function PlanRecomp() {
         {tab === "dash" ? <DashboardTab measurements={measurements.rows} sessionsPerWeek={sessionsPerWeek} error={measurements.error} />
           : tab === "entreno" ? <TrainingTab plan={plan} today={today} recommendation={recommendation} />
           : tab === "registro" ? <LogTab exercises={exercises} plan={plan} today={today} />
-          : <NutritionTab />}
+          : <NutritionTab today={today} />}
       </main>
 
       <BottomNav tabs={TABS} tab={tab} onTab={setTab} accent={T.bone} />

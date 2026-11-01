@@ -14,10 +14,11 @@ JF's strength coach. It is a *consumer* of the API — not part of the server pr
 - `coach/CLAUDE.md` — the coach's operating manual and **tool table** (the authoritative list
   of what CLI/API calls it uses). Keep it in step with [api](api.md).
 - `coach/bin/` — the CLI tools on PATH inside the container: `hoy`, `semana`, `plan`, `medir`,
-  `importar`, `api`, `sql` (thin wrappers) with logic in `hoy.mjs`, `semana.mjs`, `plan.mjs`,
-  `medir.mjs`.
+  `comida`, `importar`, `api`, `sql` (thin wrappers) with logic in `hoy.mjs`, `semana.mjs`, `plan.mjs`,
+  `medir.mjs`, `comida.mjs` (food log; reads the macro goal by regex from `pages/_lib/recomp/data.jsx` `MACROS`).
 - `coach/.claude/skills/` — the Spanish workflow skills: `hoy`, `registrar`, `cambiar`,
-  `medicion`, `importar`, `revision`.
+  `medicion`, `importar`, `revision`, `calorias` (count a plate from a photo: ask what the photo
+  cannot show before any number, confirm, `comida guardar`; reference values in `calorias/alimentos.md`).
 - `coach/entrypoint.sh`, `coach/README.md`, `coach/PROFILE.example.md`, `coach/HISTORY.md`.
 - `coach/data/` — **gitignored**; the only place the coach writes (PROFILE, history, notas).
 

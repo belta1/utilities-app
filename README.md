@@ -296,7 +296,7 @@ still rendering its own hard-coded copy of the plan).
 | **Cuerpo** | Body composition from `body_measurements`: big current weight and its curve, a card per metric with its change since the previous measurement, and the 12-week goal bars. Empty until the first measurement is written (see the `medicion` coach skill). |
 | **Hoy** | The weekly plan, from `plan_days` / `plan_exercises`; opens on today's day (or the coach's recommendation). A ring counts the day's sets; on each card one disc per planned set fills as you log. Tap a card to open it: log with the − / + steppers (they start from the previous set) and the RIR chips, see the sets done today as chips, HISTORIAL lists the last 4 sessions of that exercise (any day it was done, newest first; the newest prefills the form), the phone keyboard's Go/Enter adds the set, and "Como se hace" below the logger holds the load ladder and execution steps, which belong to the exercise, so a swap brings its own. |
 | **Registro** | Free-form log for any date. Type to search (accents ignored, any word order) or pick from the list — grouped by movement pattern (Empuje, Halar, Pierna, Core; plan exercises first, in bold), or **Nuevo ejercicio**, add sets, delete with ✕. Shows sets / exercises / volume for the day, sets grouped by exercise, and a 60-day history — tap a day to jump to it. |
-| **Comida** | Weekly meal plan and supplements (content in `pages/_lib/recomp/data.jsx`) |
+| **Comida** | **Registrado hoy** on top: today's meals from `food_logs` (counted by the coach from photos, see the `calorias` skill), kcal against the daily goal with a bar, protein / carbs / fat against `MACROS`, and each meal opening into its item breakdown and the assumptions you confirmed. Below it, the weekly meal plan and supplements (content in `pages/_lib/recomp/data.jsx`). |
 
 Details worth knowing:
 
@@ -392,6 +392,18 @@ Body composition, one row per measurement date, written from Samsung Health scre
 | `PUT` | `/api/measurements` | Body `{ measured_on, weight_kg?, body_fat_pct?, fat_mass_kg?, skeletal_muscle_kg?, bmi?, bmr_kcal?, body_water_kg?, protein_kg?, minerals_kg?, visceral_fat_level?, source?, note? }`. Upserts on `measured_on`; at least one metric required. |
 | `DELETE` | `/api/measurements/:id` | |
 
+### Food
+
+What was eaten, one row per meal, written by the coach after counting a plate from a photo.
+
+| Method | Path | Notes |
+|---|---|---|
+| `GET` | `/api/food?date=YYYY-MM-DD` · `/api/food?from=&to=` | Meals of a day (desayuno → almuerzo → post → snack → cena) or a range (newest day first). |
+| `GET` | `/api/food/days?from=&to=` | One row per day with a log: `meals`, `kcal`, `protein_g`, `carbs_g`, `fat_g`. |
+| `POST` | `/api/food` | Body `{ meal, description, eaten_on?, items?, kcal?, protein_g?, carbs_g?, fat_g?, confidence?, assumptions?, source? }`. `meal` is `desayuno`/`almuerzo`/`cena`/`snack`/`post`; `confidence` `alta`/`media`/`baja` (default `media`). `items` is `[{ name, grams?, kcal, protein_g?, carbs_g?, fat_g?, note? }]`; when present the totals are summed from it, otherwise `kcal` is required. |
+| `PATCH` | `/api/food/:id` | Any of the same keys. Passing `items` replaces the breakdown and recomputes the totals. |
+| `DELETE` | `/api/food/:id` | |
+
 ### Other routes
 
 | Method | Path | Notes |
@@ -435,6 +447,12 @@ plan_days         id ───────────────────�
 body_measurements id, measured_on (date, unique), weight_kg, body_fat_pct, fat_mass_kg,
                   skeletal_muscle_kg, bmi, bmr_kcal, body_water_kg, protein_kg,
                   minerals_kg, visceral_fat_level, source, note, updated_at
+
+food_logs         id, eaten_on (date), meal 'desayuno'|'almuerzo'|'cena'|'snack'|'post',
+                  description, items jsonb [{name, grams, kcal, protein_g, carbs_g, fat_g, note}],
+                  kcal, protein_g, carbs_g, fat_g (summed from items by the API),
+                  confidence 'alta'|'media'|'baja', assumptions, source, logged_at
+                  index: (eaten_on, logged_at)
 ```
 
 **Seeding** runs after migration on every start and is safe to repeat:
@@ -636,6 +654,7 @@ text works too — it recognizes what you mean and uses the same tools.
 | "ok, guarda los objetivos" · "de acuerdo" | Writes the targets so the training tab shows **OBJETIVO** on each card, and applies any change to the prescription itself (series, reps, seconds) to the plan. | `hoy --guardar` → `PUT /api/exercises/:id/target` (`set_by: hoy`) + `PATCH /api/plan/exercises/:slot`. |
 | `/cambiar` · "cambia el remo con barra por remo en máquina" · "saca el peso muerto del miércoles" · "agrega face pull el viernes" | Confirms the slot and the replacement in one line, swaps it, then recomputes the target. **Visible on the dashboard immediately** — the card picks up the new exercise's figure, its CARGA ladder and its execution steps, because those live on the exercise. | `plan <día>` → `plan cambiar <slot> <ejercicio>` (`PATCH /api/plan/exercises/:slot`), then `hoy --day <día> --guardar`. |
 | `/medicion` + a Samsung Health screenshot · "me pesé, 77.8" | Reads weight, body fat, skeletal muscle, BMI, BMR and body water off the image, asks **¿confirmo?**, writes one row for that date, and shows the change vs the previous measurement. It appears on the Cuerpo tab. It will not change any load because of a measurement. | `medir <fecha> peso=… grasa=… …` → `PUT /api/measurements` (upsert on the date). Also updates `data/PROFILE.md`. |
+| `/calorias` + a photo of the plate · "comí esto" · "¿cuántas calorías tiene?" | Names what it sees, then **asks** what a photo cannot show before giving any number — cooking oil/butter, portion (grams if you weighed, or a reference: taza, palma, unidades), hidden sauces/cheese/sugar, whether you ate it all, drinks — in one numbered message with quick options. Nothing is assumed silently: if you answer "no sé", it states the default it will use and the range, and lowers the confidence. Shows the breakdown per item, asks **¿confirmo?**, saves, and replies with the day's total vs the goal and the protein left. Packaged food: it asks for the nutrition label. "Era media palta" corrects the meal. It appears on the Comida tab. | `comida guardar '<json>'` → `POST /api/food`; `comida corregir <id>` → `PATCH /api/food/:id`; `comida` / `comida semana` to read. Reference values in `coach/.claude/skills/calorias/alimentos.md`. |
 | "banca 40x8 x4 rir2" · "hice press militar 6.5 kg 10 10 9 10" · "plancha 60s x3" · "3 series de 12 con 15 en remo unilateral" | Parses sets, shows a table (exercise · kg · reps or s · RIR · n), asks **¿confirmo?**, logs them, reads the day back. If you gave no RIR it asks once ("¿cuántas te quedaban?"). Then tells you what those sets mean for next time. | `POST /api/sets` per set, `GET /api/sets?date=` after. Names are matched to the catalog (accents ignored); if ambiguous it asks with two options; unknown → offers `POST /api/exercises`. |
 | "eso fue ayer" · "el martes hice…" | Same, for another date. | `date` in the body. |
 | "borra la última serie" · "la S3 fueron 9 reps, no 8" | Fixes or deletes a set, after confirming which one. | `PATCH` / `DELETE /api/sets/:id`. |

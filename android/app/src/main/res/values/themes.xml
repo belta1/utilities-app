@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dark slate everywhere, so the cold start and the status/navigation bars blend
+         with the page instead of flashing white. -->
+    <style name="Theme.Recomp" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/bg</item>
+        <item name="android:colorBackground">@color/bg</item>
+        <item name="android:statusBarColor">@color/bg</item>
+        <item name="android:navigationBarColor">@color/bg</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:colorAccent">@color/bone</item>
+        <item name="android:colorPrimary">@color/bg</item>
+    </style>
+    <style name="Theme.Recomp.Dialog" parent="android:Theme.Material.Dialog.Alert">
+        <item name="android:colorAccent">@color/bone</item>
+        <item name="android:background">@color/surface</item>
+    </style>
+</resources>

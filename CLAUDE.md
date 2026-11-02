@@ -22,7 +22,12 @@ pages/          one .jsx = one route  (pages/foo.jsx → GET /foo, pages/a/b.jsx
 pages/_lib/     private modules, importable but never served (any "_" path segment)
 pages/_lib/recomp/{tokens,data,ui}.jsx   design tokens, meal/macro content, shared tabs
 coach/bin/      the coach's CLI tools (hoy, semana, plan, medir, comida, importar, api, sql)
+android/        native Android shell (WebView on the server; see android/README.md)
 ```
+
+The Android app (`android/`) holds no UI of its own: it loads the server, so page and API
+changes reach it with a normal deploy. Rebuild the APK only when `android/` changes (JDK 17 +
+Android SDK 34, `./gradlew assembleRelease`, signed with this machine's debug key).
 
 **The RECOMP data lives in Postgres, not in the page.** The plan (`plan_days` /
 `plan_exercises`), each exercise's figure, load ladder and execution detail

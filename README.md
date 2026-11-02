@@ -566,6 +566,7 @@ pages/
 scripts/sql.mjs         run SQL with the PG* env vars from a machine without psql
 scripts/import-sesiones.mjs   load a phone-notes training log (see header) through the API; dry run by default
 coach/                  the Claude Code coaching agent (manual, skills, tools, entrypoint) — section 10
+android/                native Android app: a WebView shell around the dashboard (build + install in android/README.md)
 CLAUDE.md               working notes for Claude Code (skills live user-wide in ~/.claude/skills/)
 Dockerfile              node:24-alpine, production
 docker-compose.yml      pulls the published image (Portainer Option A); `--build` builds it (Option B / C)

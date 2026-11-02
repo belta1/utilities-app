@@ -45,6 +45,7 @@ Cross-component seam: the coach never imports server code — it calls `/api/*` 
 | Seed data | `seed/` | Exercise catalog, per-exercise reference, the plan, SVG figures | [seed](modules/seed.md) |
 | Coach | `coach/CLAUDE.md` `coach/bin/` `coach/.claude/skills/` | Coaching agent, its CLI tools and skills | [coach](modules/coach.md) |
 | Scripts | `scripts/sql.mjs` `scripts/import-sesiones.mjs` | SQL runner, phone-notes importer | [recipes](recipes.md#run-sql) |
+| Android app | `android/` (`MainActivity.java`, `README.md`) | Native WebView shell around the dashboard; no UI of its own, built locally with Gradle | `android/README.md` |
 | Deploy | `Dockerfile` `docker-compose.yml` `.github/workflows/docker.yml` | GHCR image → Portainer stack `utilities-app` | [recipes](recipes.md#deploy) |
 
 _Every "key files" cell holds real paths so an agent can open them directly._

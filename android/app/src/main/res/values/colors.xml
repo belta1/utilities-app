@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Same tokens as pages/_lib/recomp/tokens.jsx ("Goma y tiza"). -->
+<resources>
+    <color name="bg">#15191C</color>
+    <color name="surface">#1D2226</color>
+    <color name="line">#323A40</color>
+    <color name="bone">#EEEBE5</color>
+    <color name="ash">#9AA3AA</color>
+    <color name="push">#EF4B4B</color>
+    <color name="pull">#4C8DF6</color>
+    <color name="legs">#F4C431</color>
+    <color name="core">#3CBF7C</color>
+</resources>

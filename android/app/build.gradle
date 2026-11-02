@@ -1,0 +1,38 @@
+plugins {
+    id "com.android.application"
+}
+
+android {
+    namespace "com.belta1.recomp"
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.belta1.recomp"
+        minSdk 26
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            // Personal sideloaded app: signed with this machine's debug key, so a new APK
+            // installs over the previous one. Keep ~/.android/debug.keystore.
+            signingConfig signingConfigs.debug
+        }
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation "androidx.swiperefreshlayout:swiperefreshlayout:1.1.0"
+}

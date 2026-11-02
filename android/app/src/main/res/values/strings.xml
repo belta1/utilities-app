@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Recomp</string>
+    <string name="shortcut_server">Servidor</string>
+    <string name="default_server">http://jfubuntu:3000</string>
+    <string name="server_title">Direccion del servidor</string>
+    <string name="server_hint">http://jfubuntu:3000</string>
+    <string name="save">Guardar</string>
+    <string name="cancel">Cancelar</string>
+    <string name="offline_title">Sin conexion con el servidor</string>
+    <string name="offline_body">No se pudo abrir %1$s. Revisa que el telefono este en la red de la casa (o en la VPN) y que el servidor este encendido.</string>
+    <string name="retry">Reintentar</string>
+    <string name="change_server">Cambiar servidor</string>
+    <string name="bad_url">Escribe una direccion que empiece con http:// o https://</string>
+</resources>

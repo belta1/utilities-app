@@ -338,6 +338,119 @@ const LoggedToday = ({ today }) => {
   );
 };
 
+// The week so far, Monday to Sunday, from /api/food/days: one bar per day against the daily
+// goal, the accumulated kcal against the goal of the days elapsed, and the averages over
+// the days that have a log. ‹ › walk back through earlier weeks. Rendered only after
+// mount (today comes from an effect), so the Date math here never runs during SSR.
+const isoDay = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const addDays = (iso, n) => { const d = new Date(`${iso}T12:00:00`); d.setDate(d.getDate() + n); return isoDay(d); };
+const mondayOf = (iso) => addDays(iso, -((new Date(`${iso}T12:00:00`).getDay() + 6) % 7));
+const WEEK_LETTERS = ["L", "M", "M", "J", "V", "S", "D"];
+
+const WeekFood = ({ today }) => {
+  const [offset, setOffset] = useState(0);            // 0 = this week, -1 = the previous one…
+  const [days, setDays] = useState(null);
+  const [error, setError] = useState(null);
+  const from = today ? addDays(mondayOf(today), offset * 7) : null;
+  const to = from ? addDays(from, 6) : null;
+  useEffect(() => {
+    if (!from) return;
+    let live = true;
+    setDays(null); setError(null);
+    fetch(`/api/food/days?from=${from}&to=${to}`)
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((r) => live && setDays(r))
+      .catch((e) => live && setError(e.message));
+    return () => { live = false; };
+  }, [from, to]);
+  if (!from) return null;
+
+  const byDate = Object.fromEntries((days ?? []).map((d) => [d.eaten_on, d]));
+  const week = Array.from({ length: 7 }, (_, i) => {
+    const date = addDays(from, i);
+    return { date, row: byDate[date] ?? null, future: date > today, isToday: date === today };
+  });
+  const logged = week.filter((d) => d.row);
+  const elapsed = week.filter((d) => !d.future).length;
+  const sum = (k) => logged.reduce((a, d) => a + Number(d.row[k]), 0);
+  const kcal = sum("kcal");
+  const goalSoFar = MACROS.kcal * elapsed;
+  const avg = (k) => (logged.length ? Math.round(sum(k) / logged.length) : null);
+  const scale = Math.max(MACROS.kcal * 1.25, ...logged.map((d) => d.row.kcal));
+  const fmt = (n) => String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ".");   // 9.789, also below 10.000
+  const range = `${Number(from.slice(8))}/${Number(from.slice(5, 7))} al ${Number(to.slice(8))}/${Number(to.slice(5, 7))}`;
+  const arrow = (dir, disabled, label) => (
+    <button type="button" aria-label={label} disabled={disabled} onClick={() => setOffset(offset + dir)} className="press" style={{
+      width: 44, height: 44, borderRadius: 12, border: `1.5px solid ${T.line}`, background: "none", fontSize: 20,
+      color: disabled ? T.faint : T.bone,
+    }}>{dir < 0 ? "‹" : "›"}</button>
+  );
+
+  return (
+    <div style={{ padding: "12px 16px 4px" }}>
+      <Card>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {arrow(-1, false, "Semana anterior")}
+          <div style={{ flex: 1, textAlign: "center" }}>
+            <h2 style={{ fontSize: 15, fontWeight: 650 }}>{offset === 0 ? "Esta semana" : offset === -1 ? "Semana pasada" : "Semana"}</h2>
+            <div style={{ fontSize: 13, color: T.ash, marginTop: 2 }}>{range}</div>
+          </div>
+          {arrow(1, offset >= 0, "Semana siguiente")}
+        </div>
+
+        {error ? <p style={{ fontSize: 14, color: T.danger, marginTop: 14 }}>No se pudo leer la semana ({error}).</p> : (
+          <>
+            <div style={{ marginTop: 16, display: "flex", alignItems: "baseline", flexWrap: "wrap", gap: "4px 10px" }}>
+              <span style={{ ...NUM, fontSize: 36, lineHeight: 1 }}>{fmt(kcal)}</span>
+              <span style={{ fontSize: 13, color: T.ash }}>kcal acumuladas{goalSoFar ? ` de ${fmt(goalSoFar)} (${elapsed} ${elapsed === 1 ? "dia" : "dias"} de meta)` : ""}</span>
+            </div>
+
+            {/* bars: one per day, the dashed line is the daily goal */}
+            <div style={{ position: "relative", height: 120, marginTop: 16, display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 6, alignItems: "end" }}>
+              <div aria-hidden style={{ position: "absolute", left: 0, right: 0, bottom: `${(MACROS.kcal / scale) * 100}%`, borderTop: `1.5px dashed ${T.faint}` }} />
+              {week.map((d) => {
+                const v = d.row?.kcal ?? 0;
+                const over = v > MACROS.kcal * 1.1;
+                return (
+                  <div key={d.date} title={d.row ? `${fmt(v)} kcal` : "sin registro"} style={{
+                    height: d.row ? `${Math.max(4, (v / scale) * 100)}%` : 4, borderRadius: 6,
+                    background: !d.row ? (d.future ? "transparent" : T.line) : over ? T.danger : d.isToday ? T.bone : T.ash,
+                    border: d.future && !d.row ? `1.5px dashed ${T.line}` : "none",
+                  }} />
+                );
+              })}
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 6, marginTop: 6, textAlign: "center" }}>
+              {week.map((d, i) => (
+                <div key={d.date}>
+                  <div style={{ fontSize: 13, fontWeight: d.isToday ? 800 : 500, color: d.isToday ? T.bone : T.ash }}>{WEEK_LETTERS[i]}</div>
+                  <div style={{ ...NUM, fontSize: 13, color: d.row ? T.bone : T.faint, marginTop: 2 }}>{d.row ? (d.row.kcal >= 1000 ? `${(d.row.kcal / 1000).toFixed(1)}k` : d.row.kcal) : "—"}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* averages over the days that have a log */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12, marginTop: 18, paddingTop: 14, borderTop: `1px solid ${T.line}` }}>
+              {[["kcal por dia", avg("kcal"), MACROS.kcal, "", T.bone], ["proteina por dia", avg("protein_g"), MACROS.prot, " g", MACRO_COLORS.prot],
+                ["carbs por dia", avg("carbs_g"), MACROS.carbs, " g", MACRO_COLORS.carbs], ["grasa por dia", avg("fat_g"), MACROS.fat, " g", MACRO_COLORS.fat]].map(([l, v, goal, u, col]) => (
+                <div key={l}>
+                  <div style={{ ...NUM, fontSize: 22, lineHeight: 1, color: v == null ? T.faint : col }}>{v == null ? "—" : fmt(v)}<span style={unit}>{u} / {fmt(goal)}{u}</span></div>
+                  <div style={{ fontSize: 13, color: T.ash, marginTop: 4 }}>{l}</div>
+                </div>
+              ))}
+            </div>
+            <p style={{ fontSize: 13, color: T.faint, marginTop: 12, lineHeight: 1.45 }}>
+              {days == null ? "Cargando…"
+                : logged.length === 0 ? "Sin comidas registradas esta semana."
+                : `Promedio de ${logged.length} ${logged.length === 1 ? "dia" : "dias"} con registro. Un dia con comidas sin foto queda corto.`}
+            </p>
+          </>
+        )}
+      </Card>
+    </div>
+  );
+};
+
 export const NutritionTab = ({ today }) => {
   const [activeDay, setActiveDay] = useState(0);
   const [showSups, setShowSups] = useState(false);
@@ -349,6 +462,7 @@ export const NutritionTab = ({ today }) => {
   return (
     <div>
       <LoggedToday today={today} />
+      <WeekFood today={today} />
       <div className="scrollx" style={{ display: "flex", gap: 8, overflowX: "auto", padding: "8px 16px 4px" }}>
         {WEEK.map((d, i) => {
           const on = activeDay === i;

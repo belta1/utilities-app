@@ -43,7 +43,7 @@ One `.jsx` = one route. Served by [server](server.md), compiled by [jsx](jsx.md)
 - Copy is **Spanish without accents** (`musculo`, `Nutricion`), sentence case. Look and
   primitives ("Goma y tiza", `tokens.jsx` + `kit.jsx`) in [conventions](../conventions.md).
 - **Dashboard content that is data lives in Postgres, not here** — plan, targets, measurements,
-  food log, figures. The Comida tab's `LoggedToday` (`ui.jsx`) fetches `/api/food?date=today` itself on mount (prop `today` from `recomp_v3`). Editing those is an API call, not a page edit. See [architecture](../architecture.md).
+  food log, figures. The Comida tab's `LoggedToday` (`ui.jsx`) fetches `/api/food?date=today` itself on mount (prop `today` from `recomp_v3`); `WeekFood` below it fetches `/api/food/days` for the Monday–Sunday week (‹ › for earlier weeks). Editing those is an API call, not a page edit. See [architecture](../architecture.md).
 - **"HOY sugerido"**: `recomp_v3.jsx`'s `useRecommendation(today)` fetches
   `/api/recommendation?date=today`; when present, the Training tab shows a `T.gold` banner and
   auto-opens the recommended plan day instead of the calendar weekday (the day strip still lets
